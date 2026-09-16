@@ -1,0 +1,19 @@
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Build output
+target/
+node_modules/
+dist/
+
+# Local configuration and model assets
+.env
+.env.*
+!.env.example
+assets/local/
+models/local/
+*.local.toml
+
+# Logs
+*.log
