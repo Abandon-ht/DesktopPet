@@ -26,5 +26,6 @@
 
 ## 视频封面
 
-- [16:9 横版封面](assets/covers/desktoppet-cover-16x9.png)
+- [宽屏重新构图封面（1672 × 941，约 16:9）](assets/covers/desktoppet-cover-16x9-native.png)
+- [16:9 精确比例适配版（1920 × 1080）](assets/covers/desktoppet-cover-16x9.png)
 - [4:3 横版封面](assets/covers/desktoppet-cover-4x3.png)
