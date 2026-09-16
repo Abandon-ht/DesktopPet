@@ -23,3 +23,8 @@
 - 完成基础桌宠、养成和语音对话后，再实现关键词唤醒与全双工；三维角色和其他平台不阻塞 macOS 首个版本。
 
 首个开发入口：[P0 技术验证](docs/05-roadmap.md)。建议将 P0 的实际测量结果作为正式排期依据。文档中的延迟、内存、帧率均为初始验收目标，非现有实现的实测成绩。
+
+## 视频封面
+
+- [16:9 横版封面](assets/covers/desktoppet-cover-16x9.png)
+- [4:3 横版封面](assets/covers/desktoppet-cover-4x3.png)
