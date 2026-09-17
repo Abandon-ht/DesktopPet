@@ -1,5 +1,5 @@
 [workspace]
-members = ["tools/p0-probe"]
+members = ["tools/p0-probe", "tools/p0-ipc-probe"]
 resolver = "3"
 
 [workspace.package]

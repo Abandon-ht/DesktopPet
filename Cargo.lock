@@ -1283,6 +1283,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "p0-ipc-probe"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+]
+
+[[package]]
 name = "p0-probe"
 version = "0.1.0"
 dependencies = [
