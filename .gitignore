@@ -17,3 +17,6 @@ models/local/
 
 # Logs
 *.log
+
+# Local P0 reports and rendered character previews (not redistributable assets)
+artifacts/local/

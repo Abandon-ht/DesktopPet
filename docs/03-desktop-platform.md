@@ -19,7 +19,7 @@ Wayland 的输入由 compositor 路由到 surface，普通应用不能假定知�
 
 宠物宿主负责自己的 NSWindow/NSView，Rust 通过受限的 AppKit 绑定完成原生调用。窗口创建、焦点、层级、移动和输入模式更新按 API 要求回到主线程；GPU 工作不阻塞窗口事件处理。
 
-首版：无边框、透明、不投影或可控投影、浮动层级、点击宠物不激活设置窗口。托盘/设置窗口负责输入文字和获得键盘焦点。全屏 App、Spaces、Mission Control、Stage Manager 分别测试，不用一个“所有工作区可见”标志承诺完全一致行为。
+首版：无边框、透明、不投影或可控投影、浮动层级、点击宠物不激活设置窗口。启动与鼠标悬停不改变其他应用的键盘焦点；主动点击或拖拽角色允许角色取得并保留焦点，用户点击其他窗口恢复输入。角色可在后续绑定动作快捷键或文本输入，托盘/设置窗口仍可独立取得焦点。全屏 App、Spaces、Mission Control、Stage Manager 分别测试，不用一个“所有工作区可见”标志承诺完全一致行为。
 
 wgpu Surface 查询 alpha modes，选择实际支持的透明合成方式；清屏 alpha=0，确保输出与预乘 alpha 规则匹配。只设置 clear color 并不足以让原生窗口透明。[wgpu 合成模式](https://docs.rs/wgpu/latest/wgpu/enum.CompositeAlphaMode.html)
 
@@ -29,7 +29,7 @@ Tauri 透明 WebView 配置在 macOS 涉及 `macOSPrivateApi` 限制。推荐拓
 
 必须区分“窗口看起来透明”和“鼠标事件穿透”。Tauri 的 `set_ignore_cursor_events` 与 AppKit 的 `ignoresMouseEvents` 都是窗口级控制，不自动根据角色像素 alpha 工作。[Tauri Window](https://docs.rs/tauri/latest/tauri/window/struct.Window.html)、[AppKit 鼠标事件](https://developer.apple.com/documentation/appkit/nswindow/ignoresmouseevents)
 
-首版命中方案：角色包多边形 + 当前变换矩阵，必要时用降采样 alpha 遮罩增强精度。不要每帧同步 GPU readback 计算命中。动画显著改变轮廓时更新 CPU 侧区域或异步遮罩。
+首版接受角色周围适量的命中余量，P0 可使用粗略几何区域；后续采用角色包多边形 + 当前变换矩阵，必要时用降采样 alpha 遮罩增强精度。不要每帧同步 GPU readback 计算命中。动画显著改变轮廓时更新 CPU 侧区域或异步遮罩。
 
 1. 宿主采样可用的全局鼠标位置；窗口已穿透时仍需能发现鼠标重新进入角色。不能只依赖该窗口的鼠标移动回调。
 2. 鼠标进入可交互区域时恢复接收事件；离开时穿透。近边界设置小幅迟滞，避免频繁抖动。
