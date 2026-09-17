@@ -20,3 +20,6 @@ models/local/
 
 # Local P0 reports and rendered character previews (not redistributable assets)
 artifacts/local/
+
+# Generated Tauri capability schemas
+tools/p0-tauri-probe/gen/schemas/

@@ -10,6 +10,9 @@ use std::path::Path;
 
 fn run() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.len() == 2 && args[0] == "host" {
+        return window::run_host(Path::new(&args[1]));
+    }
     // A packaged development app can supply a local asset path without embedding
     // copyrighted assets or paths in the distributable executable.
     if args.is_empty() {
@@ -45,7 +48,7 @@ fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("p0-probe: {error:#}");
+            p0_ipc_probe::event_log!("p0-probe: {error:#}");
             std::process::ExitCode::FAILURE
         }
     }

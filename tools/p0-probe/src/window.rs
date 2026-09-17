@@ -1,4 +1,4 @@
-//! P0 surface probe. This deliberately does not claim production hit testing or IPC.
+//! P0 surface probe with standalone and supervised IPC modes.
 use anyhow::{Context, Result, bail, ensure};
 use mocari::{
     assets::{RuntimeModel, load_model_runtime},
@@ -25,22 +25,60 @@ use winit::{
 };
 
 pub fn run(entry: &Path, seconds: u64) -> Result<()> {
+    run_mode(entry, seconds, false)
+}
+
+pub fn run_host(entry: &Path) -> Result<()> {
+    run_mode(entry, 3600, true)
+}
+
+#[derive(Debug)]
+enum Control {
+    Command(std::sync::mpsc::SyncSender<()>),
+    Stop(std::result::Result<(), String>),
+}
+
+fn run_mode(entry: &Path, seconds: u64, ipc: bool) -> Result<()> {
     ensure!(
         (1..=3600).contains(&seconds),
         "duration must be 1–3600 seconds"
     );
     let (entry, _, expressions) = crate::audit::preflight(entry)?;
-    let mut builder = EventLoop::builder();
+    let mut builder = EventLoop::<Control>::with_user_event();
     #[cfg(target_os = "macos")]
     builder
         .with_activation_policy(ActivationPolicy::Accessory)
         .with_activate_ignoring_other_apps(false);
     let event_loop = builder.build()?;
+    if ipc {
+        let proxy = event_loop.create_proxy();
+        std::thread::spawn(move || {
+            let result = p0_ipc_probe::server::serve(
+                &mut std::io::stdin().lock(),
+                &mut std::io::stdout().lock(),
+                |_| {
+                    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                    proxy
+                        .send_event(Control::Command(tx))
+                        .map_err(|_| anyhow::anyhow!("render loop closed"))?;
+                    rx.recv_timeout(Duration::from_secs(10))
+                        .context("render loop response timeout")?;
+                    Ok(())
+                },
+            );
+            // shutdown reply is flushed before asking the main thread to exit.
+            let _ = proxy.send_event(Control::Stop(result.map_err(|e| format!("{e:#}"))));
+        });
+    }
     let mut app = Probe {
         entry,
         expressions,
         state: None,
-        duration: Duration::from_secs(seconds),
+        duration: if ipc {
+            None
+        } else {
+            Some(Duration::from_secs(seconds))
+        },
         error: None,
     };
     event_loop.run_app(&mut app)?;
@@ -53,7 +91,7 @@ pub fn run(entry: &Path, seconds: u64) -> Result<()> {
 struct Probe {
     entry: PathBuf,
     expressions: Vec<PathBuf>,
-    duration: Duration,
+    duration: Option<Duration>,
     state: Option<State>,
     error: Option<anyhow::Error>,
 }
@@ -65,7 +103,22 @@ impl Probe {
     }
 }
 
-impl ApplicationHandler for Probe {
+impl ApplicationHandler<Control> for Probe {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Control) {
+        match event {
+            Control::Command(reply) => {
+                if self.state.is_some() {
+                    let _ = reply.send(());
+                }
+            }
+            Control::Stop(result) => {
+                if let Err(error) = result {
+                    self.error = Some(anyhow::anyhow!(error));
+                }
+                event_loop.exit();
+            }
+        }
+    }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
             return;
@@ -102,7 +155,10 @@ impl ApplicationHandler for Probe {
             self.fail(event_loop, error);
             return;
         }
-        if now.duration_since(state.started) >= self.duration {
+        if self
+            .duration
+            .is_some_and(|duration| now.duration_since(state.started) >= duration)
+        {
             state.report();
             event_loop.exit();
         } else {
@@ -150,11 +206,11 @@ impl ApplicationHandler for Probe {
                 ..
             } => {
                 state.input.press();
-                eprintln!("{}", json!({"event": "drag_requested"}));
+                p0_ipc_probe::event_log!("{}", json!({"event": "drag_requested"}));
                 state.window.drag_window().map_err(Into::into)
             }
             WindowEvent::Focused(focused) => {
-                eprintln!("{}", json!({"event": "focus", "focused": focused}));
+                p0_ipc_probe::event_log!("{}", json!({"event": "focus", "focused": focused}));
                 Ok(())
             }
             WindowEvent::RedrawRequested => state.render(),
@@ -222,7 +278,7 @@ impl State {
         surface.configure(&device, &config);
         let backend = adapter.get_info().backend;
         let composite = crate::composite::Composite::new(&device, &config, backend);
-        eprintln!(
+        p0_ipc_probe::event_log!(
             "{}",
             json!({"event":"alpha_output", "backend":format!("{backend:?}"), "straight_alpha":crate::composite::straight_output(backend, config.alpha_mode)})
         );
@@ -252,7 +308,7 @@ impl State {
         let dynamic_input = std::env::var("P0_INPUT").as_deref() == Ok("dynamic");
         let passthrough = dynamic_input || std::env::var("P0_PASSTHROUGH").as_deref() == Ok("1");
         window.set_cursor_hittest(!passthrough)?;
-        eprintln!(
+        p0_ipc_probe::event_log!(
             "{}",
             json!({"event": "ready", "adapter": format!("{:?}", adapter.get_info()), "alpha_modes": format!("{:?}", caps.alpha_modes), "selected_alpha": format!("{:?}", config.alpha_mode), "format": format!("{:?}", config.format), "initialization_ms": started.elapsed().as_secs_f64() * 1000., "monitors": monitors, "passthrough": passthrough, "ax_trusted": crate::platform::ax_trusted(), "clipping_contexts": plan.contexts().len()})
         );
@@ -294,7 +350,7 @@ impl State {
             let receiving = self.input.sample(x, y, size.width, size.height, down);
             if previous != receiving {
                 self.window.set_cursor_hittest(receiving)?;
-                eprintln!(
+                p0_ipc_probe::event_log!(
                     "{}",
                     json!({"event":"hit_region", "receiving":receiving,"point":[x,y],"left_down":down})
                 );
@@ -347,7 +403,7 @@ impl State {
                     .create_clipping_resources(&self.device, &plan)?;
             }
             self.phase = phase;
-            eprintln!(
+            p0_ipc_probe::event_log!(
                 "{}",
                 json!({"event": "case", "phase": phase, "label": label})
             );
@@ -433,7 +489,7 @@ impl State {
     fn report(&mut self) {
         self.timings.sort_by(f64::total_cmp);
         let n = self.timings.len();
-        eprintln!(
+        p0_ipc_probe::event_log!(
             "{}",
             json!({"event": "summary", "elapsed_s": self.started.elapsed().as_secs_f64(), "presented_frames": n, "cpu_submit_ms_p95": if n > 0 { Some(self.timings[((n as f64 * 0.95).ceil() as usize - 1).min(n - 1)]) } else { None }, "metric_scope": "CPU render/submit/present call duration, NOT GPU completion or frame interval", "visual_verdict": "manual review required"})
         );

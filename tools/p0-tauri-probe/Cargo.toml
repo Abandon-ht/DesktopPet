@@ -1,0 +1,15 @@
+[package]
+name = "p0-tauri-probe"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+p0-ipc-probe = { path = "../p0-ipc-probe" }
+tauri = { version = "=2.11.5", default-features = false, features = ["wry", "compression"] }
+
+[build-dependencies]
+tauri-build = "=2.6.3"

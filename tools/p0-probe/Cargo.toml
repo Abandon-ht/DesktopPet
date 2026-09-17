@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+p0-ipc-probe = { path = "../p0-ipc-probe" }
 anyhow.workspace = true
 mocari.workspace = true
 wgpu.workspace = true

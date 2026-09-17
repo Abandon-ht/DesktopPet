@@ -28,6 +28,8 @@ target/release/p0-probe audit "/path/to/Nahida_1080.model3.json" \
 
 ## 窗口与截图
 
+由 Tauri 监督的真实窗口使用 `p0-probe host MODEL`，通过 stdin/stdout 接收协议，不启用 standalone 的定时退出。完整启动和生命周期验证入口见 [桥接试件](../p0-tauri-probe/README.md)。
+
 ```sh
 # 默认 60 秒自动退出，也可指定 1–3600 秒。
 target/release/p0-probe window "/path/to/Nahida_1080.model3.json" 60
