@@ -47,7 +47,7 @@ Mocari 0.3.1 发布包示例使用 winit。macOS 原生窗口与事件循环有�
 
 `pet-core` 只依赖纯数据/时间抽象；外围适配器依赖核心定义。起步可以用一个 crate 内的模块落实这些边界，只有独立构建或依赖冲突时再拆 crate。
 
-建议最终目录如下，属于规划结构；目前已创建 `tools/p0-probe/` 原生试件、`tools/p0-ipc-probe/` 管道与 Supervisor 试件、`tools/p0-tauri-probe/` 桥接试件及根 Cargo workspace，下列正式应用与模块尚未创建：
+建议最终目录如下，属于规划结构；目前已创建三个 `tools/p0-*/` 试件及根 Cargo workspace。P1-01 已新增 `crates/pet-core/` 和 `crates/pet-protocol/`，其余正式应用与模块尚未创建。当前最小契约与后续传输层边界见 [P1 实现记录](09-p1-implementation.md)：
 
 ```text
 apps/desktop/             # Tauri 后端与薄 UI；Rust 偏好可用 Leptos CSR

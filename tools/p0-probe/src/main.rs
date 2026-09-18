@@ -3,6 +3,7 @@ mod capture;
 mod composite;
 mod input;
 mod platform;
+mod snap;
 mod window;
 
 use anyhow::{Result, bail};

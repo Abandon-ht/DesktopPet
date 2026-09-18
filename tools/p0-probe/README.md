@@ -56,10 +56,12 @@ GPU 截图每个 case 回读一次，输出含本地角色，默认被 `.gitigno
 ```sh
 python3 tools/p0-probe/measure.py "/path/to/Nahida_1080.model3.json" --seconds 60
 
-# P0-06 正式稳定性所需的时长；本轮只完成了短时 smoke test。
+# P0-06 30 分钟稳定性；2026-09-18 已完成一轮，复测请使用新输出目录。
 python3 tools/p0-probe/measure.py "/path/to/Nahida_1080.model3.json" \
   --seconds 1800 --output artifacts/local/p0/stability-30m
 ```
+
+2026-09-18 已完整运行 1800.01 秒并以退出码 0 结束：CPU 中位数 8.2%，RSS 中位数/采样最大值 110.08/110.39 MiB，平均 28.71 次 present/s。完整证据见 [P0 实测记录](../../docs/07-p0-validation.md)。基线运行期间保持解锁和固定显示配置，避免睡眠；可用 `caffeinate -di python3 ...` 将自动防睡眠限制到采样进程生命周期。
 
 脚本每 2 秒读取本次子进程的 `ps %cpu,rss`，前 5 秒不进入稳态中位数。macOS `ps` 的 CPU 数值不是 GPU 占用，也不是瞬时整机占用。RSS 是采样值，不是完整加载期间的峰值；单位转换为 MiB。
 
@@ -84,8 +86,44 @@ P0_CALIBRATION_OUTPUT=artifacts/local/p0/calibration \
 
 ## 剩余验证
 
-完整状态和顺序见 [P0 验证记录](../../docs/07-p0-validation.md)。P0 Gate 未通过，不进入 P1。
-# 动态输入实验（P0 Gate 尚未通过）
+完整状态和顺序见 [P0 验证记录](../../docs/07-p0-validation.md)。P0 Gate 已按本机技术试件条件通过，可进入 P1；专项限制见实测记录。
+
+## P0-05 底边吸附实验
+
+用户已允许在当前桌面测试；运行前确认桌面适合手动拖拽。
+
+```sh
+P0_INPUT=dynamic P0_SNAP=1 target/release/p0-probe window "/absolute/path/model.model3.json" 120
+```
+
+先把角色拖到工作区底边附近，松开鼠标。中性网格下缘锚点距底边不超过 12 logical points 时，试件尝试吸附，并输出 `screen_snap` 日志，含工作区、缩放、移动前后位置和 AX 信任状态。请核对角色下缘与可用区域底边，而非透明窗口矩形底部。远处松键应不移动，重新拖动应立即可用。
+
+目前已有纯几何测试、构建与用户三屏显示/吸附/插拔人工验证；混合 DPI 和 Dock 自动隐藏专项仍待验收；AX 窗口移动观察已有本机通过证据。该功能默认关闭，不影响已有输入/透明验证路径。当前不设置“所有桌面可见”，也不自动切换或识别 Space 名称。
+
+## P0-05 AX 窗口观察实验
+
+本机完整 120 秒人工复验已收到 511 条移动和 359 条大小通知，最终 summary 确认移动检查通过；关闭/撤权路径仍待验证。详见 [实测记录](../../docs/07-p0-validation.md)。
+
+这是独立 Swift 测试工具，验证 AXObserver 通知和窗口几何读取，尚未接入角色跟随。只观察指定应用开始测试时的焦点窗口；不读取标题或文本、不移动目标窗口，也不请求权限弹窗。无需启动角色。
+
+在 macOS 自带“终端”应用中新开一个方便拖拽的窗口，运行：
+
+```sh
+cd /Users/ncy/Projects/DesktopPet
+mkdir -p artifacts/local/p0
+xcrun swiftc -warnings-as-errors tools/p0-probe/ax-observer.swift -o artifacts/local/p0/ax-observer
+artifacts/local/p0/ax-observer com.apple.Terminal 120 | tee artifacts/local/p0/ax-manual.jsonl
+```
+
+看到 `observing` 后，拖动执行命令的终端窗口到几个明显不同的位置，再调整大小。保持屏幕解锁，先不最小化或关闭目标窗口，等 120 秒结束。不要使用 IDE 内置终端执行此命令，否则目标可能不是执行命令的窗口。切换窗口不会重新选择观察目标。
+
+如果只有 `AX_permission_required`，本次没有开始观察。此功能需要你自行决定是否授予系统“辅助功能”权限：系统设置 → 隐私与安全性 → 辅助功能，允许实际运行试件的“终端”；必要时完全退出并重开终端后重试。TCC 归属可能因启动方式而异，以重跑后的 `ax_trusted=true` 为准；若仍为 false，反馈日志以便检查，不要批量授予其他应用权限。无需屏幕录制或输入监控权限。试件不会更改系统权限。
+
+通过依据：至少收到一次 `AXMoved`，其 `frame` 的 x/y 相对初始位置有变化，最后 `summary.movement_check_passed=true`。大小变化通常产生 `AXResized`；`subscription.error=0` 表示对应订阅成功。仅 `ax_trusted=true` 或订阅成功不能代替移动验收。
+
+主测试完成后可另开一轮，先移动，再最小化/关闭目标，观察是否记录 `detached` 并结束。关闭运行命令的终端可能同时终止试件；要单测目标关闭通知，应改用另一个应用的 bundle ID 作为目标，从终端运行。权限撤销也应单独测试。退出码：0=移动检查通过，1=参数/目标/API 不可用，2=无权限，3=未取得移动证据或权限撤销；使用 `tee` 时管道退出码不一定代表试件，请查看 summary。日志位于 Git 忽略目录，重新运行会覆盖，请按测试场景换文件名保留结果。
+
+# 动态输入实验（P0 本机验收已通过）
 
 ```sh
 P0_INPUT=dynamic cargo run --release --bin p0-probe -- window /absolute/path/model.model3.json 120

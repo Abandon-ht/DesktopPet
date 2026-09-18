@@ -223,6 +223,8 @@ impl ApplicationHandler<Control> for Probe {
 }
 
 struct State {
+    snap_enabled: bool,
+    anchor_ratio: f64,
     backend: wgpu::Backend,
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -284,6 +286,30 @@ impl State {
         );
         let renderer = WgpuLive2dRenderer::new(&device, config.format);
         let model = load_model_runtime(entry)?;
+        let mut bounds = [
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ];
+        for vertex in model
+            .runtime()
+            .meshes()
+            .iter()
+            .flat_map(|mesh| mesh.vertices())
+        {
+            let [x, y] = vertex.position();
+            bounds[0] = bounds[0].min(x);
+            bounds[1] = bounds[1].min(y);
+            bounds[2] = bounds[2].max(x);
+            bounds[3] = bounds[3].max(y);
+        }
+        let aspect = size.width as f32 / size.height.max(1) as f32;
+        let sy = (1.85 / ((bounds[2] - bounds[0]).max(0.001) * aspect))
+            .min(1.85 / (bounds[3] - bounds[1]).max(0.001));
+        // Neutral lower mesh bound, frozen so expression changes do not move
+        // the window. This is a P0 anchor, not a semantic foot annotation.
+        let anchor_ratio = (0.5 + (bounds[3] - bounds[1]) * sy * 0.25) as f64;
         let textures = model
             .textures()
             .iter()
@@ -313,6 +339,8 @@ impl State {
             json!({"event": "ready", "adapter": format!("{:?}", adapter.get_info()), "alpha_modes": format!("{:?}", caps.alpha_modes), "selected_alpha": format!("{:?}", config.alpha_mode), "format": format!("{:?}", config.format), "initialization_ms": started.elapsed().as_secs_f64() * 1000., "monitors": monitors, "passthrough": passthrough, "ax_trusted": crate::platform::ax_trusted(), "clipping_contexts": plan.contexts().len()})
         );
         Ok(Self {
+            snap_enabled: std::env::var("P0_SNAP").as_deref() == Ok("1"),
+            anchor_ratio,
             backend,
             window,
             surface,
@@ -340,6 +368,7 @@ impl State {
 
     fn sample_input(&mut self) -> Result<()> {
         if self.dynamic_input {
+            let was_dragging = self.input.dragging;
             let (x, y, down) = crate::platform::pointer(&self.window)
                 .context("global pointer sampling unavailable")?;
             let size = self
@@ -354,6 +383,9 @@ impl State {
                     "{}",
                     json!({"event":"hit_region", "receiving":receiving,"point":[x,y],"left_down":down})
                 );
+            }
+            if self.snap_enabled && was_dragging && !self.input.dragging {
+                crate::platform::snap_floor(&self.window, self.anchor_ratio)?;
             }
         }
         Ok(())
