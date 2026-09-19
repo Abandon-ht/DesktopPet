@@ -23,3 +23,6 @@ artifacts/local/
 
 # Generated Tauri capability schemas
 tools/p0-tauri-probe/gen/schemas/
+
+# Generated application capability schemas
+apps/desktop/gen/schemas/

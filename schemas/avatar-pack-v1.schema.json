@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://desktoppet.local/schemas/avatar-pack-v1.json",
+  "title": "DesktopPet local avatar pack v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "display_name",
+    "renderer",
+    "entry",
+    "interaction",
+    "actions",
+    "license"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "renderer": {
+      "const": "live2d_mocari"
+    },
+    "entry": {
+      "type": "string",
+      "minLength": 1
+    },
+    "interaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "head",
+        "body",
+        "anchor"
+      ],
+      "properties": {
+        "head": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "minItems": 3,
+          "maxItems": 32,
+          "description": "Strictly convex polygon; runtime validates convexity. Top-left normalized 5:6 viewport."
+        },
+        "body": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "minItems": 3,
+          "maxItems": 32,
+          "description": "Strictly convex polygon; runtime validates convexity. Top-left normalized 5:6 viewport."
+        },
+        "anchor": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "head_pat": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "expression",
+                "duration_ms"
+              ],
+              "properties": {
+                "expression": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "duration_ms": {
+                  "type": "integer",
+                  "minimum": 100,
+                  "maximum": 5000
+                }
+              }
+            }
+          ]
+        },
+        "body_tap": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "expression",
+                "duration_ms"
+              ],
+              "properties": {
+                "expression": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "duration_ms": {
+                  "type": "integer",
+                  "minimum": 100,
+                  "maximum": 5000
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "parameter_map": {
+      "type": "object",
+      "maxProperties": 32,
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "redistributable"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "unverified",
+            "licensed",
+            "original"
+          ]
+        },
+        "redistributable": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

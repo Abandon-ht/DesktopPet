@@ -23,9 +23,11 @@ Blender 不负责将现有三维骨骼模型直接变成可驱动的 Live2D `.mo
 
 适配器接收语义状态 `happy`、`look_at`、`mouth_open`；只有角色包知道它们对应哪个 Live2D 参数。切换角色时无需修改 PetCore。
 
-## 角色包契约草案
+## 角色包契约
 
-以下是规划格式，首版实现后需要 JSON Schema 和版本迁移；不直接作为 Mocari 原生模型清单传入。
+P1-03 已固化 v1 目录包格式及 `schemas/avatar-pack-v1.schema.json`，详见 [实现与约束](11-p1-03-avatar-packs.md)。v1 将头/身体凸多边形、锚点和短时表情动作内嵌到 manifest，动作能力由实际配置派生；不直接作为 Mocari 原生模型清单传入，不支持隐式版本迁移。
+
+以下保留最初的未来扩展草案，**不是当前可导入格式**；当前模板见 `assets/demo/pack-template/manifest.example.json`。
 
 ```json
 {

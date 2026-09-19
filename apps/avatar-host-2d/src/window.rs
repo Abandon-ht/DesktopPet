@@ -1,0 +1,696 @@
+//! P1 native host. Compositing and coarse input originate in the validated P0 probe.
+use anyhow::{Context, Result, bail};
+use mocari::{
+    assets::{RuntimeModel, load_model_runtime},
+    core::Matrix44,
+    render::wgpu::*,
+};
+use serde_json::json;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+#[cfg(target_os = "macos")]
+use winit::platform::macos::{
+    ActivationPolicy, EventLoopBuilderExtMacOS, WindowAttributesExtMacOS,
+};
+use winit::{
+    application::ApplicationHandler,
+    dpi::LogicalSize,
+    event::{ElementState, MouseButton, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    window::{Window, WindowId, WindowLevel},
+};
+
+pub fn run(entry: &Path) -> Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    // A separate lease survives a stalled native event loop or blocked loader.
+    let epoch = Instant::now();
+    let last = Arc::new(AtomicU64::new(0));
+    let lease = last.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(250));
+            if epoch.elapsed().as_millis() as u64 > lease.load(Ordering::Acquire) + 8000 {
+                eprintln!("avatar-host-2d: parent lease expired");
+                std::process::exit(1);
+            }
+        }
+    });
+    let pack = if entry.file_name().is_some_and(|n| n == "manifest.json") {
+        Some(avatar_pack::open(entry)?)
+    } else {
+        None
+    };
+    let entry = if let Some(pack) = &pack {
+        pack.entry.clone()
+    } else {
+        crate::audit::preflight(entry)?.0
+    };
+    let mut builder = EventLoop::<Control>::with_user_event();
+    #[cfg(target_os = "macos")]
+    builder
+        .with_activation_policy(ActivationPolicy::Accessory)
+        .with_activate_ignoring_other_apps(false);
+    let event_loop = builder.build()?;
+    let proxy = event_loop.create_proxy();
+    std::thread::spawn(move || {
+        let result = pet_ipc::server::serve_with(
+            &mut std::io::stdin().lock(),
+            &mut std::io::stdout().lock(),
+            |command| {
+                let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                proxy
+                    .send_event(Control::Command(command, tx))
+                    .map_err(|_| anyhow::anyhow!("render loop closed"))?;
+                let value = rx
+                    .recv_timeout(Duration::from_secs(4))
+                    .context("render loop timeout")?
+                    .map_err(anyhow::Error::msg)?;
+                last.store(epoch.elapsed().as_millis() as u64, Ordering::Release);
+                Ok(value)
+            },
+        );
+        let _ = proxy.send_event(Control::Stop(result.map_err(|e| format!("{e:#}"))));
+    });
+    let mut app = AvatarHost {
+        entry,
+        pack,
+        state: None,
+        error: None,
+    };
+    event_loop.run_app(&mut app)?;
+    if let Some(error) = app.error {
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+enum Control {
+    Command(
+        pet_ipc::server::Command,
+        std::sync::mpsc::SyncSender<Result<serde_json::Value, String>>,
+    ),
+    Stop(Result<(), String>),
+}
+
+struct AvatarHost {
+    entry: PathBuf,
+    pack: Option<avatar_pack::Pack>,
+    state: Option<State>,
+    error: Option<anyhow::Error>,
+}
+impl AvatarHost {
+    fn fail(&mut self, event_loop: &ActiveEventLoop, error: anyhow::Error) {
+        self.error = Some(error);
+        event_loop.exit();
+    }
+}
+impl ApplicationHandler<Control> for AvatarHost {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: Control) {
+        use pet_ipc::server::Command;
+        use pet_protocol::DesktopCommand;
+        match event {
+            Control::Command(command, reply) => {
+                let result = (|| -> Result<serde_json::Value> {
+                    let state = self.state.as_mut().context("renderer not ready")?;
+                    match command {
+                        Command::Hello => {
+                            return Ok(
+                                json!({"avatar":state.pack.as_ref().map(|p|p.manifest.capabilities()).unwrap_or_default()}),
+                            );
+                        }
+                        Command::Ping => {}
+                        Command::Poll => {
+                            return Ok(json!({"events":std::mem::take(&mut state.events)}));
+                        }
+                        Command::Avatar(command) => state.avatar(command)?,
+                        Command::Desktop(DesktopCommand::SetScale(scale)) => {
+                            state.set_scale(scale)?
+                        }
+                        Command::Shutdown => state.set_visible(false)?,
+                        Command::Desktop(DesktopCommand::SetVisible(visible)) => {
+                            state.set_visible(visible)?
+                        }
+                        Command::Desktop(
+                            DesktopCommand::Detach | DesktopCommand::SetExternalSnapEnabled(false),
+                        ) => {}
+                        Command::Desktop(_) => bail!("capability unavailable in P1-02"),
+                    }
+                    Ok(json!({}))
+                })();
+                let _ = reply.send(result.map_err(|e| format!("{e:#}")));
+            }
+            Control::Stop(result) => {
+                if let Err(error) = result {
+                    self.error = Some(anyhow::anyhow!(error));
+                }
+                event_loop.exit();
+            }
+        }
+    }
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.state.is_some() {
+            return;
+        }
+        let attributes = Window::default_attributes()
+            .with_title("DesktopPet")
+            .with_inner_size(LogicalSize::new(500., 600.))
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_active(false)
+            .with_visible(false)
+            .with_window_level(WindowLevel::AlwaysOnTop);
+        #[cfg(target_os = "macos")]
+        let attributes = attributes
+            .with_has_shadow(false)
+            .with_accepts_first_mouse(true);
+        let result = (|| {
+            let window = Arc::new(event_loop.create_window(attributes)?);
+            pollster::block_on(State::new(window, &self.entry, self.pack.clone()))
+        })();
+        match result {
+            Ok(state) => self.state = Some(state),
+            Err(error) => self.fail(event_loop, error),
+        }
+    }
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(state) = &mut self.state else {
+            return;
+        };
+        if !state.visible {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+        let now = Instant::now();
+        if let Err(error) = state.sample_input() {
+            self.fail(event_loop, error);
+            return;
+        }
+        if now >= state.next_frame {
+            state.window.request_redraw();
+            state.next_frame = now + Duration::from_secs_f64(1. / 30.);
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(
+            state.next_frame.min(now + Duration::from_millis(16)),
+        ));
+    }
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        let Some(state) = &mut self.state else {
+            return;
+        };
+        let result = match event {
+            WindowEvent::CloseRequested => {
+                event_loop.exit();
+                Ok(())
+            }
+            WindowEvent::Resized(size) if size.width > 0 && size.height > 0 => {
+                state.config.width = size.width;
+                state.config.height = size.height;
+                state.surface.configure(&state.device, &state.config);
+                state.composite =
+                    crate::composite::Composite::new(&state.device, &state.config, state.backend);
+                state.transform.update_matrix(
+                    &state.queue,
+                    &fit_bounds(state.neutral_bounds, size.width, size.height),
+                );
+                Ok(())
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } if state.visible => {
+                state.begin_press();
+                state.input.press();
+                // Failed OS drag initiation must not crash the whole character.
+                if let Err(error) = state.window.drag_window() {
+                    eprintln!("drag: {error}");
+                }
+                Ok(())
+            }
+            WindowEvent::RedrawRequested if state.visible => state.render(),
+            _ => Ok(()),
+        };
+        if let Err(error) = result {
+            self.fail(event_loop, error);
+        }
+    }
+}
+
+struct State {
+    pack: Option<avatar_pack::Pack>,
+    feedbacks: Vec<(
+        pet_protocol::Feedback,
+        mocari::expression::ExpressionPlayer,
+        u32,
+    )>,
+    active: Option<(mocari::expression::ExpressionPlayer, u32)>,
+    last_animation: Instant,
+    pose_dirty: bool,
+    events: Vec<pet_protocol::AvatarEvent>,
+    pressed: Option<(
+        pet_protocol::HitRegion,
+        winit::dpi::PhysicalPosition<i32>,
+        Instant,
+    )>,
+    neutral_bounds: [f32; 4],
+    snap_enabled: bool,
+    anchor_ratio: f64,
+    backend: wgpu::Backend,
+    window: Arc<Window>,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    renderer: WgpuLive2dRenderer,
+    model: RuntimeModel,
+    buffers: WgpuMeshBuffers,
+    textures: Vec<WgpuTexture>,
+    clipping: WgpuClippingResources,
+    mask: WgpuMaskRenderTarget,
+    transform: WgpuTransform,
+    composite: crate::composite::Composite,
+    next_frame: Instant,
+    input: crate::input::Input,
+    dynamic_input: bool,
+    visible: bool,
+}
+
+impl State {
+    async fn new(
+        window: Arc<Window>,
+        entry: &Path,
+        pack: Option<avatar_pack::Pack>,
+    ) -> Result<Self> {
+        let started = Instant::now();
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let surface = instance.create_surface(window.clone())?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                compatible_surface: Some(&surface),
+                ..Default::default()
+            })
+            .await?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await?;
+        let size = window.inner_size();
+        let caps = surface.get_capabilities(&adapter);
+        let mut config = surface
+            .get_default_config(&adapter, size.width, size.height)
+            .context("surface unsupported")?;
+        config.format = preferred_surface_format(&caps.formats).context("no surface format")?;
+        config.alpha_mode = [
+            wgpu::CompositeAlphaMode::PreMultiplied,
+            wgpu::CompositeAlphaMode::PostMultiplied,
+        ]
+        .into_iter()
+        .find(|mode| caps.alpha_modes.contains(mode))
+        .context("surface does not support transparent compositing")?;
+        config.present_mode = wgpu::PresentMode::Fifo;
+        surface.configure(&device, &config);
+        let backend = adapter.get_info().backend;
+        let composite = crate::composite::Composite::new(&device, &config, backend);
+        pet_ipc::event_log!(
+            "{}",
+            json!({"event":"alpha_output", "backend":format!("{backend:?}"), "straight_alpha":crate::composite::straight_output(backend, config.alpha_mode)})
+        );
+        let renderer = WgpuLive2dRenderer::new(&device, config.format);
+        let mut model = if let Some(pack) = &pack {
+            pack.load_model()?
+        } else {
+            load_model_runtime(entry)?
+        };
+        let mut feedbacks = Vec::new();
+        if let Some(pack) = &pack {
+            for feedback in [
+                pet_protocol::Feedback::HeadPat,
+                pet_protocol::Feedback::BodyTap,
+            ] {
+                if let Some(action) = pack.manifest.action(feedback) {
+                    feedbacks.push((
+                        feedback,
+                        mocari::expression::ExpressionPlayer::new(
+                            mocari::expression::load_expression(avatar_pack::checked_path(
+                                &pack.root,
+                                &action.expression,
+                            )?)?,
+                        ),
+                        action.duration_ms,
+                    ));
+                }
+            }
+        }
+        model.runtime_mut().reset_parameters();
+        model
+            .runtime_mut()
+            .update_meshes()
+            .context("neutral mesh update failed")?;
+        let mut bounds = [
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ];
+        for vertex in model
+            .runtime()
+            .meshes()
+            .iter()
+            .flat_map(|mesh| mesh.vertices())
+        {
+            let [x, y] = vertex.position();
+            bounds[0] = bounds[0].min(x);
+            bounds[1] = bounds[1].min(y);
+            bounds[2] = bounds[2].max(x);
+            bounds[3] = bounds[3].max(y);
+        }
+        let aspect = size.width as f32 / size.height.max(1) as f32;
+        let sy = (1.85 / ((bounds[2] - bounds[0]).max(0.001) * aspect))
+            .min(1.85 / (bounds[3] - bounds[1]).max(0.001));
+        // Neutral lower mesh bound, frozen so expression changes do not move
+        // the window. This is a P0 anchor, not a semantic foot annotation.
+        let anchor_ratio = pack
+            .as_ref()
+            .map(|p| p.manifest.interaction.anchor[1])
+            .unwrap_or((0.5 + (bounds[3] - bounds[1]) * sy * 0.25) as f64);
+        let textures = model
+            .textures()
+            .iter()
+            .map(|t| {
+                renderer.create_rgba8_texture(&device, &queue, t.width(), t.height(), t.rgba())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let buffers = WgpuMeshBuffers::from_drawables(&device, model.runtime().meshes())
+            .context("mesh buffer creation failed")?;
+        let mut plan = WgpuClippingPlan::from_mesh_buffers(&buffers);
+        plan.prepare_single_texture_masks(&buffers)
+            .context("clipping layout failed")?;
+        let clipping = renderer.create_clipping_resources(&device, &plan)?;
+        let mask = renderer.create_mask_render_target(&device, 512)?;
+        let transform = renderer.create_transform(
+            &device,
+            &fit_matrix(model.runtime(), size.width, size.height),
+        );
+        let monitors: Vec<_> = window.available_monitors().map(|m| json!({"name": m.name(), "position": [m.position().x, m.position().y], "size": [m.size().width, m.size().height], "scale": m.scale_factor()})).collect();
+        let dynamic_input = cfg!(target_os = "macos");
+        let passthrough = true;
+        window.set_cursor_hittest(!passthrough)?;
+        pet_ipc::event_log!(
+            "{}",
+            json!({"event": "ready", "adapter": format!("{:?}", adapter.get_info()), "alpha_modes": format!("{:?}", caps.alpha_modes), "selected_alpha": format!("{:?}", config.alpha_mode), "format": format!("{:?}", config.format), "initialization_ms": started.elapsed().as_secs_f64() * 1000., "monitors": monitors, "passthrough": passthrough, "ax_trusted": crate::platform::ax_trusted(), "clipping_contexts": plan.contexts().len()})
+        );
+        Ok(Self {
+            pack,
+            feedbacks,
+            active: None,
+            last_animation: Instant::now(),
+            pose_dirty: false,
+            events: Vec::new(),
+            pressed: None,
+            neutral_bounds: bounds,
+            snap_enabled: cfg!(target_os = "macos"),
+            anchor_ratio,
+            backend,
+            window,
+            surface,
+            config,
+            device,
+            queue,
+            renderer,
+            model,
+            buffers,
+            textures,
+            clipping,
+            mask,
+            transform,
+            composite,
+            next_frame: Instant::now(),
+            input: crate::input::Input::default(),
+            dynamic_input,
+            visible: false,
+        })
+    }
+
+    fn sample_input(&mut self) -> Result<()> {
+        if self.dynamic_input {
+            let was_dragging = self.input.dragging;
+            let (x, y, down) = crate::platform::pointer(&self.window)
+                .context("global pointer sampling unavailable")?;
+            let size = self
+                .window
+                .inner_size()
+                .to_logical::<f64>(self.window.scale_factor());
+            let previous = self.input.receiving;
+            let receiving = if let Some(pack) = &self.pack {
+                self.input.sample_region(
+                    pack.manifest
+                        .interaction
+                        .hit([x / size.width, y / size.height])
+                        .is_some(),
+                    down,
+                )
+            } else {
+                self.input.sample(x, y, size.width, size.height, down)
+            };
+            if was_dragging
+                && !self.input.dragging
+                && let Some((region, origin, started)) = self.pressed.take()
+            {
+                let current = self.window.outer_position()?;
+                let tolerance = 4.0 * self.window.scale_factor();
+                let unmoved = (f64::from(current.x - origin.x)).abs() <= tolerance
+                    && (f64::from(current.y - origin.y)).abs() <= tolerance;
+                let still_hit = self.pack.as_ref().and_then(|p| {
+                    p.manifest
+                        .interaction
+                        .hit([x / size.width, y / size.height])
+                }) == Some(region);
+                if unmoved
+                    && still_hit
+                    && started.elapsed() < Duration::from_secs(1)
+                    && self.events.len() < 32
+                {
+                    self.events.push(pet_protocol::AvatarEvent::Hit(region));
+                }
+            }
+            if previous != receiving {
+                self.window.set_cursor_hittest(receiving)?;
+                pet_ipc::event_log!(
+                    "{}",
+                    json!({"event":"hit_region", "receiving":receiving,"point":[x,y],"left_down":down})
+                );
+            }
+            if self.snap_enabled && was_dragging && !self.input.dragging {
+                crate::platform::snap_floor(&self.window, self.anchor_ratio)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn render(&mut self) -> Result<()> {
+        let now = Instant::now();
+        let delta = now
+            .duration_since(self.last_animation)
+            .as_secs_f32()
+            .min(0.1);
+        self.last_animation = now;
+        if self.active.is_some() || self.pose_dirty {
+            let runtime = self.model.runtime_mut();
+            runtime.reset_parameters();
+            if let Some((player, duration)) = &mut self.active {
+                player.tick(delta);
+                if player.time() * 1000.0 >= *duration as f32 && !player.is_fading_out() {
+                    player.start_fade_out();
+                }
+                if player.is_finished() {
+                    self.active = None;
+                } else {
+                    player.apply(runtime);
+                }
+            }
+            runtime.update_meshes().context("mesh update failed")?;
+            self.buffers
+                .update_drawables(&self.queue, runtime.meshes())?;
+            let mut plan = WgpuClippingPlan::from_mesh_buffers(&self.buffers);
+            plan.prepare_single_texture_masks(&self.buffers)?;
+            if !self
+                .renderer
+                .update_clipping_resources(&self.queue, &mut self.clipping, &plan)?
+            {
+                self.clipping = self
+                    .renderer
+                    .create_clipping_resources(&self.device, &plan)?;
+            }
+            self.pose_dirty = false;
+        }
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                self.surface.configure(&self.device, &self.config);
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Validation => bail!("surface validation failure"),
+        };
+        let view = frame.texture.create_view(&Default::default());
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: self.mask.view(),
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            self.renderer.draw_masks_with_textures(
+                &mut pass,
+                &self.buffers,
+                &self.clipping,
+                &self.textures,
+            )?;
+        }
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.composite.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            self.renderer.draw_with_textures_clipping_and_transform(
+                &mut pass,
+                &self.buffers,
+                &self.textures,
+                &self.clipping,
+                &self.mask,
+                &self.transform,
+            )?;
+        }
+        self.composite.draw(&mut encoder, &view);
+        self.queue.submit([encoder.finish()]);
+        self.window.pre_present_notify();
+        self.queue.present(frame);
+        Ok(())
+    }
+    fn begin_press(&mut self) {
+        self.active = None;
+        self.pose_dirty = true;
+        self.events.clear();
+        if let (Some(pack), Some((x, y, _)), Ok(origin)) = (
+            &self.pack,
+            crate::platform::pointer(&self.window),
+            self.window.outer_position(),
+        ) {
+            let size = self
+                .window
+                .inner_size()
+                .to_logical::<f64>(self.window.scale_factor());
+            self.pressed = pack
+                .manifest
+                .interaction
+                .hit([x / size.width, y / size.height])
+                .map(|r| (r, origin, Instant::now()));
+        }
+    }
+    fn avatar(&mut self, command: pet_protocol::AvatarCommand) -> Result<()> {
+        match command {
+            pet_protocol::AvatarCommand::CancelFeedback => {
+                self.active = None;
+                self.pose_dirty = true;
+            }
+            pet_protocol::AvatarCommand::PlayFeedback(feedback) => {
+                if !self.visible || self.input.dragging {
+                    return Ok(());
+                }
+                let (_, player, duration) = self
+                    .feedbacks
+                    .iter()
+                    .find(|(f, _, _)| *f == feedback)
+                    .context("feedback unavailable")?;
+                let mut player = player.clone();
+                player.restart();
+                self.active = Some((player, *duration));
+                self.last_animation = Instant::now();
+                pet_ipc::event_log!(
+                    "{}",
+                    json!({"event":"feedback_started","feedback":feedback})
+                );
+            }
+        }
+        Ok(())
+    }
+    fn set_scale(&mut self, scale: u16) -> Result<()> {
+        anyhow::ensure!((50..=150).contains(&scale), "scale must be 50–150 percent");
+        self.pressed = None;
+        self.events.clear();
+        self.input = Default::default();
+        self.window.set_cursor_hittest(false)?;
+        let _ = self.window.request_inner_size(LogicalSize::new(
+            5.0 * f64::from(scale),
+            6.0 * f64::from(scale),
+        ));
+        Ok(())
+    }
+    fn set_visible(&mut self, visible: bool) -> Result<()> {
+        self.pressed = None;
+        self.events.clear();
+        self.active = None;
+        self.pose_dirty = true;
+        self.window.set_cursor_hittest(false)?;
+        self.input = crate::input::Input::default();
+        self.visible = visible;
+        self.window.set_visible(visible);
+        self.next_frame = Instant::now();
+        pet_ipc::event_log!(
+            "{}",
+            json!({"event":"visibility_applied","visible":visible})
+        );
+        Ok(())
+    }
+}
+
+fn fit_matrix(runtime: &mocari::ModelRuntime, width: u32, height: u32) -> Matrix44 {
+    let mut bounds = [
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    for v in runtime.meshes().iter().flat_map(|m| m.vertices()) {
+        let [x, y] = v.position();
+        bounds[0] = bounds[0].min(x);
+        bounds[1] = bounds[1].min(y);
+        bounds[2] = bounds[2].max(x);
+        bounds[3] = bounds[3].max(y);
+    }
+    fit_bounds(bounds, width, height)
+}
+fn fit_bounds(bounds: [f32; 4], width: u32, height: u32) -> Matrix44 {
+    let aspect = width as f32 / height.max(1) as f32;
+    let sy = (1.85 / ((bounds[2] - bounds[0]).max(0.001) * aspect))
+        .min(1.85 / (bounds[3] - bounds[1]).max(0.001));
+    let sx = sy / aspect;
+    let mut matrix = Matrix44::identity();
+    matrix.scale(sx, sy);
+    matrix.translate(
+        -(bounds[0] + bounds[2]) * 0.5 * sx,
+        -(bounds[1] + bounds[3]) * 0.5 * sy,
+    );
+    matrix
+}

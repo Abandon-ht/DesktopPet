@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DesktopPet",
+  "version": "0.1.0",
+  "identifier": "dev.desktoppet.alpha",
+  "build": { "frontendDist": "ui" },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [{ "title": "DesktopPet · 角色与设置", "width": 480, "height": 680, "visible": false, "resizable": false }],
+    "security": { "csp": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src ipc: http://ipc.localhost" }
+  },
+  "bundle": { "active": false }
+}

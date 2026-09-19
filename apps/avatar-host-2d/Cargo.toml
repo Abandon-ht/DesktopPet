@@ -1,0 +1,21 @@
+[package]
+name = "avatar-host-2d"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+avatar-pack = { path = "../../crates/avatar-pack" }
+pet-ipc = { path = "../../crates/pet-ipc" }
+pet-protocol = { path = "../../crates/pet-protocol" }
+anyhow.workspace = true
+mocari.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+serde_json.workspace = true
+pollster.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "=0.2.2", features = ["NSWindow", "NSView", "NSGraphics", "NSEvent", "NSScreen"] }
+objc2-foundation = "=0.2.2"

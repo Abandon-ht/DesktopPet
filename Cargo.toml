@@ -1,5 +1,15 @@
 [workspace]
-members = ["crates/pet-protocol", "crates/pet-core", "tools/p0-probe", "tools/p0-ipc-probe", "tools/p0-tauri-probe"]
+members = [
+    "apps/desktop",
+    "apps/avatar-host-2d",
+    "crates/pet-core",
+    "crates/pet-protocol",
+    "crates/pet-ipc",
+    "crates/avatar-pack",
+    "tools/p0-probe",
+    "tools/p0-ipc-probe",
+    "tools/p0-tauri-probe",
+]
 resolver = "3"
 
 [workspace.package]
