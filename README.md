@@ -15,6 +15,7 @@
 | [架构决策与参考项目](docs/06-decisions-and-references.md) | ADR、开源项目借鉴范围、官方资料 |
 | [P0 实测记录](docs/07-p0-validation.md) | 固定版本构建、纳西妲参数/表情、透明 Surface、短时基线和待测项 |
 | [P1 分步实现](docs/09-p1-implementation.md) | 核心契约、托盘与宿主实现进度；角色导入和平台验收清单 |
+| [P1-05 他应用吸附](docs/13-p1-05-external-snap.md) | 吸附规则首步与后续 AX 接入条件 |
 
 关键结论：
 

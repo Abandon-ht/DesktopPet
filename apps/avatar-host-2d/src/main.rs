@@ -1,6 +1,7 @@
 mod animation;
 mod audit;
 mod composite;
+pub mod external_snap;
 mod input;
 mod metrics;
 mod placement;
