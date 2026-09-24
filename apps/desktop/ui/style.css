@@ -3,3 +3,4 @@ section{border-top:1px solid #d9e1d5;margin-top:18px;padding-top:14px}h2{font-si
 section{border-top:1px solid #d9e1d5;margin-top:18px;padding-top:14px}h2{font-size:15px;margin:0 0 12px}label{font-size:12px;display:block;margin-bottom:7px}.row{display:flex;gap:8px}input,select{min-width:0;flex:1;border:1px solid #bacbb9;border-radius:6px;padding:8px;background:#fff;color:#23392f}.row button{white-space:nowrap}#import-message{font-size:12px;color:#845945;overflow-wrap:anywhere;max-height:64px;overflow:auto}#scale{width:100%;box-sizing:border-box}output{float:right}.check{display:flex;align-items:center;gap:8px}.check input{flex:none;min-width:0}#external-message{overflow-wrap:anywhere}
 
 #window-perch{width:100%;box-sizing:border-box}
+#gaze-radius{width:100%;box-sizing:border-box}

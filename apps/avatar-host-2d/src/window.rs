@@ -133,6 +133,9 @@ impl ApplicationHandler<Control> for AvatarHost {
                         Command::Desktop(DesktopCommand::SetWindowPerch(percent)) => {
                             state.set_window_perch(percent)?
                         }
+                        Command::Desktop(DesktopCommand::SetGazeRadius(radius)) => {
+                            state.set_gaze_radius(radius)?
+                        }
                         Command::Shutdown => state.set_visible(false)?,
                         Command::Desktop(DesktopCommand::SetVisible(visible)) => {
                             state.set_visible(visible)?
@@ -276,6 +279,7 @@ struct State {
     metrics: crate::metrics::Metrics,
     animation: crate::animation::Animation,
     gaze_target: [f32; 2],
+    gaze_radius: u16,
     layout_path: Option<PathBuf>,
     placement: Option<crate::placement::Saved>,
     screens: Vec<crate::placement::Screen>,
@@ -460,6 +464,7 @@ impl State {
             metrics: Default::default(),
             animation: Default::default(),
             gaze_target: [0.0; 2],
+            gaze_radius: 400,
             layout_path,
             placement,
             screens,
@@ -507,10 +512,11 @@ impl State {
                 .window
                 .inner_size()
                 .to_logical::<f64>(self.window.scale_factor());
-            self.gaze_target = [
-                ((x / size.width - 0.5) * 2.0).clamp(-1.0, 1.0) as f32,
-                ((0.3 - y / size.height) * 2.0).clamp(-1.0, 1.0) as f32,
-            ];
+            self.gaze_target = crate::animation::gaze_target(
+                [x, y],
+                [size.width, size.height],
+                f64::from(self.gaze_radius),
+            );
             self.pointer_near =
                 x >= -100.0 && y >= -100.0 && x <= size.width + 100.0 && y <= size.height + 100.0;
             let previous = self.input.receiving;
@@ -815,6 +821,14 @@ impl State {
             "window perch must be 20–80 percent"
         );
         self.perch_ratio = f64::from(percent) / 100.0;
+        Ok(())
+    }
+    fn set_gaze_radius(&mut self, radius: u16) -> Result<()> {
+        anyhow::ensure!(
+            (150..=1200).contains(&radius),
+            "gaze radius must be 150–1200"
+        );
+        self.gaze_radius = radius;
         Ok(())
     }
     fn restore_placement(&mut self) {

@@ -10,6 +10,35 @@ pub struct Pose {
     pub gaze: [f32; 2],
     pub eye_open: f32,
 }
+/// The pointer is in top-left-origin logical coordinates relative to the pet.
+/// Preserve the original gaze direction nearby and fade it to neutral at the
+/// configurable outer radius around the face.
+pub fn gaze_target(pointer: [f64; 2], viewport: [f64; 2], radius: f64) -> [f32; 2] {
+    if !pointer.iter().chain(viewport.iter()).all(|v| v.is_finite())
+        || !radius.is_finite()
+        || viewport[0] <= 0.0
+        || viewport[1] <= 0.0
+        || radius <= 0.0
+    {
+        return [0.0; 2];
+    }
+    let center = [viewport[0] * 0.5, viewport[1] * 0.3];
+    let distance = (pointer[0] - center[0]).hypot(pointer[1] - center[1]);
+    if distance >= radius {
+        return [0.0; 2];
+    }
+    let start = radius * 0.75;
+    let fade = if distance <= start {
+        1.0
+    } else {
+        let t = (radius - distance) / (radius - start);
+        t * t * (3.0 - 2.0 * t)
+    };
+    [
+        (((pointer[0] / viewport[0] - 0.5) * 2.0).clamp(-1.0, 1.0) * fade) as f32,
+        (((0.3 - pointer[1] / viewport[1]) * 2.0).clamp(-1.0, 1.0) * fade) as f32,
+    ]
+}
 impl Animation {
     pub fn tick(&mut self, dt: f32, target: [f32; 2], dragging: bool) -> Pose {
         let dt = if dt.is_finite() {
@@ -85,5 +114,17 @@ mod tests {
         let pose = motion.tick(3600.0, [1.0, 1.0], false);
         assert!(pose.gaze[0] < 0.6);
         assert_eq!(pose.eye_open, 1.0);
+    }
+    #[test]
+    fn gaze_range_fades_to_neutral_and_is_adjustable() {
+        let viewport = [500.0, 600.0];
+        let pointer = [550.0, 180.0];
+        assert_eq!(gaze_target(pointer, viewport, 250.0), [0.0, 0.0]);
+        assert!(gaze_target(pointer, viewport, 400.0)[0] > 0.0);
+        assert_eq!(gaze_target([650.0, 180.0], viewport, 400.0), [0.0, 0.0]);
+        let inside = gaze_target([500.0, 180.0], viewport, 400.0)[0];
+        let fading = gaze_target([600.0, 180.0], viewport, 400.0)[0];
+        assert!(inside > fading && fading > 0.0);
+        assert_eq!(gaze_target([f64::NAN, 0.0], viewport, 400.0), [0.0, 0.0]);
     }
 }

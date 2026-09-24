@@ -34,6 +34,7 @@ struct Shared {
     active: Mutex<Option<PathBuf>>,
     selection: AtomicU64,
     scale: AtomicU16,
+    gaze_radius: AtomicU16,
     perch: AtomicU16,
     perch_overrides: Mutex<BTreeMap<String, u16>>,
     preferences_write: Mutex<()>,
@@ -169,6 +170,9 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
             host.desktop(DesktopCommand::SetWindowPerch(
                 shared.perch.load(Ordering::Acquire),
             ))?;
+            host.desktop(DesktopCommand::SetGazeRadius(
+                shared.gaze_radius.load(Ordering::Acquire),
+            ))?;
             let capabilities = host.avatar_capabilities;
             core.update(Event::Desktop(DesktopEvent::Stopped));
             core.update(Event::Intent(Intent::SetVisible(
@@ -187,6 +191,7 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
             *shared.active.lock().unwrap() = Some(selected_model.clone());
             let mut applied_scale = shared.scale.load(Ordering::Acquire);
             let mut applied_perch = shared.perch.load(Ordering::Acquire);
+            let mut applied_gaze_radius = shared.gaze_radius.load(Ordering::Acquire);
             let mut external_seen = 0;
             let mut revision = shared.revision.load(Ordering::Acquire);
             let mut applied_visible = core.state().visible;
@@ -214,6 +219,9 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
                             ))?;
                             candidate.desktop(DesktopCommand::SetWindowPerch(
                                 library::perch_for(shared, &path),
+                            ))?;
+                            candidate.desktop(DesktopCommand::SetGazeRadius(
+                                shared.gaze_radius.load(Ordering::Acquire),
                             ))?;
                             Ok(candidate)
                         })();
@@ -243,6 +251,7 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
                                 applied_visible = core.state().visible;
                                 applied_scale = shared.scale.load(Ordering::Acquire);
                                 applied_perch = shared.perch.load(Ordering::Acquire);
+                                applied_gaze_radius = shared.gaze_radius.load(Ordering::Acquire);
                                 external_seen = 0;
                                 *shared.import_error.lock().unwrap() = None;
                                 shared.report("ready", "角色切换完成", Some(host.id()));
@@ -266,6 +275,11 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
                 if perch != applied_perch {
                     host.desktop(DesktopCommand::SetWindowPerch(perch))?;
                     applied_perch = perch;
+                }
+                let gaze_radius = shared.gaze_radius.load(Ordering::Acquire);
+                if gaze_radius != applied_gaze_radius {
+                    host.desktop(DesktopCommand::SetGazeRadius(gaze_radius))?;
+                    applied_gaze_radius = gaze_radius;
                 }
                 let new_revision = shared.revision.load(Ordering::Acquire);
                 let visible = shared.visible.load(Ordering::Acquire);
@@ -374,6 +388,7 @@ fn run() -> Result<()> {
         active: Mutex::new(None),
         selection: AtomicU64::new(0),
         scale: AtomicU16::new(100),
+        gaze_radius: AtomicU16::new(400),
         perch: AtomicU16::new(50),
         perch_overrides: Mutex::new(BTreeMap::new()),
         preferences_write: Mutex::new(()),
@@ -405,6 +420,7 @@ fn run() -> Result<()> {
             library::import_pack,
             library::select_pack,
             library::set_scale,
+            library::set_gaze_radius,
             library::set_window_perch,
             set_external_snap,
             library::preferences
@@ -494,6 +510,7 @@ mod tests {
                 active: Mutex::new(None),
                 selection: AtomicU64::new(0),
                 scale: AtomicU16::new(100),
+                gaze_radius: AtomicU16::new(400),
                 perch: AtomicU16::new(50),
                 perch_overrides: Mutex::new(BTreeMap::new()),
                 preferences_write: Mutex::new(()),
@@ -634,19 +651,39 @@ mod tests {
         worker.join().unwrap();
     }
     #[test]
-    fn selection_and_size_restore_after_restart() {
+    fn selection_size_and_gaze_range_restore_after_restart() {
         let fixture = Fixture::new("normal");
         let (shared, _) = controls();
         *shared.library.lock().unwrap() = Some(fixture.0.clone());
         shared.scale.store(75, Ordering::Release);
+        shared.gaze_radius.store(650, Ordering::Release);
         library::save_selection(&shared, &fixture.0.join("model"));
         let (restored, _) = controls();
         library::restore(&restored, &fixture.0, None);
         assert_eq!(restored.scale.load(Ordering::Acquire), 75);
+        assert_eq!(restored.gaze_radius.load(Ordering::Acquire), 650);
         assert_eq!(
             *restored.requested.lock().unwrap(),
             Some(fixture.0.join("model"))
         );
+    }
+    #[test]
+    fn older_preferences_use_default_gaze_range() {
+        let fixture = Fixture::new("normal");
+        let selected = fixture.0.join("model");
+        std::fs::write(
+            fixture.0.join("preferences.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "selected": selected,
+                "scale": 100
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let (restored, _) = controls();
+        library::restore(&restored, &fixture.0, None);
+        assert_eq!(restored.gaze_radius.load(Ordering::Acquire), 400);
     }
     #[test]
     fn window_perch_overrides_remain_independent_per_role_after_restart() {

@@ -11,17 +11,23 @@ struct Saved {
     version: u32,
     selected: PathBuf,
     scale: u16,
+    #[serde(default = "default_gaze_radius")]
+    gaze_radius: u16,
     #[serde(default)]
     perch_overrides: BTreeMap<String, u16>,
 }
 #[derive(Serialize)]
 pub struct Preferences {
     scale: u16,
+    gaze_radius: u16,
     window_perch: u16,
     importing: bool,
     error: Option<String>,
     external_snap: bool,
     external_error: Option<String>,
+}
+const fn default_gaze_radius() -> u16 {
+    400
 }
 fn directory(shared: &Shared) -> Result<PathBuf, String> {
     shared
@@ -56,6 +62,14 @@ pub fn restore(shared: &Shared, directory: &std::path::Path, bundled: Option<&st
         && saved.selected.is_file()
     {
         shared.scale.store(saved.scale, Ordering::Release);
+        shared.gaze_radius.store(
+            if (150..=1200).contains(&saved.gaze_radius) {
+                saved.gaze_radius
+            } else {
+                default_gaze_radius()
+            },
+            Ordering::Release,
+        );
         *shared.perch_overrides.lock().unwrap() = saved
             .perch_overrides
             .into_iter()
@@ -111,6 +125,7 @@ pub fn save_selection(shared: &Shared, path: &std::path::Path) {
             version: 1,
             selected: path.to_owned(),
             scale: shared.scale.load(Ordering::Acquire),
+            gaze_radius: shared.gaze_radius.load(Ordering::Acquire),
             perch_overrides: shared.perch_overrides.lock().unwrap().clone(),
         };
         let temp = directory.join("preferences.tmp");
@@ -126,6 +141,7 @@ pub fn save_selection(shared: &Shared, path: &std::path::Path) {
 pub fn preferences(state: tauri::State<'_, Arc<Shared>>) -> Preferences {
     Preferences {
         scale: state.scale.load(Ordering::Acquire),
+        gaze_radius: state.gaze_radius.load(Ordering::Acquire),
         window_perch: state.perch.load(Ordering::Acquire),
         importing: state.importing.load(Ordering::Acquire),
         error: state.import_error.lock().unwrap().clone(),
@@ -209,6 +225,17 @@ pub fn set_scale(scale: u16, state: tauri::State<'_, Arc<Shared>>) -> Result<(),
         return Err("大小范围为 50%–150%".into());
     }
     state.scale.store(scale, Ordering::Release);
+    let _ = state.wake.try_send(());
+    Ok(())
+}
+#[tauri::command]
+pub fn set_gaze_radius(radius: u16, state: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
+    if !(150..=1200).contains(&radius) {
+        return Err("视线跟随范围为 150–1200 逻辑像素".into());
+    }
+    let path = state.active.lock().unwrap().clone().ok_or("请先加载角色")?;
+    state.gaze_radius.store(radius, Ordering::Release);
+    save_selection(&state, &path);
     let _ = state.wake.try_send(());
     Ok(())
 }

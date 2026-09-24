@@ -71,6 +71,8 @@ pub enum DesktopCommand {
     SetScale(u16),
     /// Normalized window contact height in percent (20..=80).
     SetWindowPerch(u16),
+    /// Gaze activation radius around the pet face in logical pixels (150..=1200).
+    SetGazeRadius(u16),
     /// Host chooses a nearby valid target on release; no per-frame IPC.
     SetExternalSnapEnabled(bool),
     Detach,

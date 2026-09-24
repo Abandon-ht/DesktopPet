@@ -35,6 +35,14 @@ document.querySelector('#switch').addEventListener('click', async () => {
   catch (error) {message.textContent = String(error);}
 });
 const scale = document.querySelector('#scale');
+const gazeRadius = document.querySelector('#gaze-radius');
+const gazeRadiusValue = document.querySelector('#gaze-radius-value');
+let gazeEditing = false;
+gazeRadius.addEventListener('pointerdown', () => { gazeEditing = true; });
+gazeRadius.addEventListener('pointerup', () => { gazeEditing = false; });
+gazeRadius.addEventListener('pointercancel', () => { gazeEditing = false; });
+gazeRadius.addEventListener('keydown', () => { gazeEditing = true; });
+gazeRadius.addEventListener('keyup', () => { gazeEditing = false; });
 const externalSnap = document.querySelector('#external-snap');
 const externalMessage = document.querySelector('#external-message');
 const perch = document.querySelector('#window-perch');
@@ -58,16 +66,21 @@ scale.addEventListener('input', () => document.querySelector('#scale-value').tex
 scale.addEventListener('change', async () => {
   try {await invoke('set_scale',{scale:Number(scale.value)});} catch (error) {message.textContent = String(error);}
 });
+gazeRadius.addEventListener('input', () => { gazeRadiusValue.textContent = `${gazeRadius.value} 点`; });
+gazeRadius.addEventListener('change', async () => {
+  try { await invoke('set_gaze_radius', {radius: Number(gazeRadius.value)}); }
+  catch (error) { message.textContent = String(error); }
+});
 perch.addEventListener('input', () => { perchValue.textContent = `${perch.value}%`; });
 perch.addEventListener('change', async () => {
   try { await invoke('set_window_perch', {percent: Number(perch.value)}); }
   catch (error) { externalMessage.textContent = String(error); }
 });
 (async () => {
-  try { await updatePacks(); const p = await invoke('preferences'); scale.value = p.scale; perch.value = p.window_perch; perchValue.textContent = `${p.window_perch}%`; showExternalPreference(p); document.querySelector('#scale-value').textContent = `${p.scale}%`; }
+  try { await updatePacks(); const p = await invoke('preferences'); scale.value = p.scale; gazeRadius.value = p.gaze_radius; gazeRadiusValue.textContent = `${p.gaze_radius} 点`; perch.value = p.window_perch; perchValue.textContent = `${p.window_perch}%`; showExternalPreference(p); document.querySelector('#scale-value').textContent = `${p.scale}%`; }
   catch (error) {message.textContent=String(error);}
 })();
 setInterval(async () => {
-  try { const p = await invoke('preferences'); if (p.error) message.textContent = p.error; showExternalPreference(p); if (!perchEditing) { perch.value = p.window_perch; perchValue.textContent = `${p.window_perch}%`; } }
+  try { const p = await invoke('preferences'); if (p.error) message.textContent = p.error; showExternalPreference(p); if (!gazeEditing) { gazeRadius.value = p.gaze_radius; gazeRadiusValue.textContent = `${p.gaze_radius} 点`; } if (!perchEditing) { perch.value = p.window_perch; perchValue.textContent = `${p.window_perch}%`; } }
   catch (_) {}
 },1000);
