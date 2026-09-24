@@ -119,7 +119,7 @@ impl ApplicationHandler<Control> for AvatarHost {
                     match command {
                         Command::Hello => {
                             return Ok(
-                                json!({"avatar":state.pack.as_ref().map(|p|p.manifest.capabilities()).unwrap_or_default()}),
+                                json!({"avatar":state.pack.as_ref().map(|p|p.manifest.capabilities()).unwrap_or_default(),"ax_trusted":crate::platform::ax_trusted()}),
                             );
                         }
                         Command::Ping => {}
@@ -134,9 +134,10 @@ impl ApplicationHandler<Control> for AvatarHost {
                         Command::Desktop(DesktopCommand::SetVisible(visible)) => {
                             state.set_visible(visible)?
                         }
-                        Command::Desktop(
-                            DesktopCommand::Detach | DesktopCommand::SetExternalSnapEnabled(false),
-                        ) => {}
+                        Command::Desktop(DesktopCommand::Detach) => state.detach_external(),
+                        Command::Desktop(DesktopCommand::SetExternalSnapEnabled(enabled)) => {
+                            state.set_external_enabled(enabled)?
+                        }
                         Command::Desktop(_) => bail!("capability unavailable in P1-02"),
                     }
                     Ok(json!({}))
@@ -189,6 +190,10 @@ impl ApplicationHandler<Control> for AvatarHost {
             return;
         }
         let now = Instant::now();
+        if now >= state.next_external_check {
+            state.maintain_external();
+            state.next_external_check = now + Duration::from_millis(250);
+        }
         if let Err(error) = state.sample_input() {
             self.fail(event_loop, error);
             return;
@@ -200,13 +205,15 @@ impl ApplicationHandler<Control> for AvatarHost {
                 state.next_frame = now + Duration::from_secs_f64(1. / 30.);
             }
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(state.next_frame.min(
-            now + Duration::from_millis(if state.pointer_near || state.input.dragging {
-                16
-            } else {
-                33
-            }),
-        )));
+        event_loop.set_control_flow(ControlFlow::WaitUntil(
+            state.next_frame.min(state.next_external_check).min(
+                now + Duration::from_millis(if state.pointer_near || state.input.dragging {
+                    16
+                } else {
+                    33
+                }),
+            ),
+        ));
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         let Some(state) = &mut self.state else {
@@ -259,6 +266,10 @@ impl ApplicationHandler<Control> for AvatarHost {
 }
 
 struct State {
+    ax_probe: crate::ax::Probe,
+    external_snap: crate::external_snap::ExternalSnap,
+    external_enabled: bool,
+    next_external_check: Instant,
     metrics: crate::metrics::Metrics,
     animation: crate::animation::Animation,
     gaze_target: [f32; 2],
@@ -434,6 +445,10 @@ impl State {
             .map(|(_, screens, _)| screens)
             .unwrap_or_default();
         Ok(Self {
+            ax_probe: crate::ax::Probe::new(),
+            external_snap: Default::default(),
+            external_enabled: false,
+            next_external_check: Instant::now(),
             metrics: Default::default(),
             animation: Default::default(),
             gaze_target: [0.0; 2],
@@ -530,7 +545,35 @@ impl State {
                 );
             }
             if self.snap_enabled && was_dragging && !self.input.dragging {
-                if let Err(error) = crate::platform::snap_floor(&self.window, self.anchor_ratio) {
+                let mut attached = false;
+                if self.external_enabled
+                    && let Some(target) = self.ax_probe.latest()
+                    && let Ok((window, _, _)) = crate::platform::desktop(&self.window)
+                    && let Some(destination) = self.external_snap.release(
+                        window,
+                        self.anchor_ratio,
+                        crate::platform::ax_trusted() == Some(true),
+                        std::process::id() as i32,
+                        &[target],
+                    )
+                {
+                    match crate::platform::move_to(&self.window, destination) {
+                        Ok(()) => {
+                            attached = true;
+                            pet_ipc::event_log!(
+                                "{}",
+                                json!({"event":"external_attached","pid":target.pid,"window":target.window})
+                            );
+                        }
+                        Err(error) => {
+                            self.external_snap.detach();
+                            eprintln!("external snap move: {error:#}");
+                        }
+                    }
+                }
+                if !attached
+                    && let Err(error) = crate::platform::snap_floor(&self.window, self.anchor_ratio)
+                {
                     eprintln!("screen snap unavailable: {error:#}");
                 }
                 self.remember_placement();
@@ -694,6 +737,7 @@ impl State {
         Ok(())
     }
     fn begin_press(&mut self) {
+        self.detach_external();
         self.active = None;
         self.pose_dirty = true;
         self.events.clear();
@@ -819,7 +863,89 @@ impl State {
             }
         }
     }
+    fn detach_external(&mut self) {
+        if self.external_snap.detach() {
+            pet_ipc::event_log!("{}", json!({"event":"external_detached"}));
+        }
+    }
+    fn fall_to_screen(&mut self) {
+        if let Ok((window, screens, id)) = crate::platform::desktop(&self.window)
+            && let Some(screen) = screens
+                .iter()
+                .find(|screen| screen.id == id)
+                .or(screens.first())
+        {
+            let work = screen.work;
+            let target = crate::snap::Rect {
+                x: window
+                    .x
+                    .clamp(work.x, work.x + (work.width - window.width).max(0.0)),
+                y: work.y + work.height - window.height * self.anchor_ratio,
+                ..window
+            };
+            if let Err(error) = crate::platform::move_to(&self.window, target) {
+                eprintln!("screen fallback: {error:#}");
+            }
+        }
+        self.remember_placement();
+    }
+    fn set_external_enabled(&mut self, enabled: bool) -> Result<()> {
+        if enabled {
+            anyhow::ensure!(
+                crate::platform::ax_trusted() == Some(true),
+                "Accessibility permission is required"
+            );
+        } else {
+            let was_attached = self.external_snap.attached();
+            self.detach_external();
+            if was_attached && self.visible {
+                self.fall_to_screen();
+            }
+        }
+        self.external_enabled = enabled;
+        self.ax_probe.set_enabled(enabled && self.visible);
+        Ok(())
+    }
+    fn maintain_external(&mut self) {
+        if !self.external_snap.attached() || self.input.dragging || !self.visible {
+            return;
+        }
+        let trusted = crate::platform::ax_trusted() == Some(true);
+        let current = crate::platform::desktop(&self.window)
+            .ok()
+            .map(|result| result.0);
+        let destination = current.and_then(|window| {
+            self.external_snap
+                .follow(window, self.anchor_ratio, trusted, self.ax_probe.latest())
+        });
+        match destination {
+            Some(destination) => {
+                if current.is_some_and(|current| {
+                    (current.x - destination.x).abs() < 0.5
+                        && (current.y - destination.y).abs() < 0.5
+                }) {
+                    return;
+                }
+                if let Err(error) = crate::platform::move_to(&self.window, destination) {
+                    eprintln!("external follow: {error:#}");
+                    self.detach_external();
+                }
+            }
+            None => {
+                self.detach_external();
+                self.fall_to_screen();
+            }
+        }
+    }
     fn set_visible(&mut self, visible: bool) -> Result<()> {
+        if !visible {
+            let was_attached = self.external_snap.attached();
+            self.detach_external();
+            if was_attached {
+                self.remember_placement();
+            }
+        }
+        self.ax_probe.set_enabled(visible && self.external_enabled);
         self.pressed = None;
         self.events.clear();
         self.active = None;

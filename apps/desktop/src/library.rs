@@ -17,6 +17,8 @@ pub struct Preferences {
     scale: u16,
     importing: bool,
     error: Option<String>,
+    external_snap: bool,
+    external_error: Option<String>,
 }
 fn directory(shared: &Shared) -> Result<PathBuf, String> {
     shared
@@ -98,6 +100,8 @@ pub fn preferences(state: tauri::State<'_, Arc<Shared>>) -> Preferences {
         scale: state.scale.load(Ordering::Acquire),
         importing: state.importing.load(Ordering::Acquire),
         error: state.import_error.lock().unwrap().clone(),
+        external_snap: state.external_requested.load(Ordering::Acquire),
+        external_error: state.external_error.lock().unwrap().clone(),
     }
 }
 #[tauri::command]

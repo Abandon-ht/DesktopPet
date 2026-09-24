@@ -34,6 +34,9 @@ struct Shared {
     scale: AtomicU16,
     importing: AtomicBool,
     import_error: Mutex<Option<String>>,
+    external_requested: AtomicBool,
+    external_revision: AtomicU64,
+    external_error: Mutex<Option<String>>,
     // Emergency controls never wait for PetCore or an ordinary command queue.
     visible: AtomicBool,
     revision: AtomicU64,
@@ -84,6 +87,13 @@ fn status(state: tauri::State<'_, Arc<Shared>>) -> Status {
 #[tauri::command]
 fn control(action: String, state: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
     state.request(&action)
+}
+#[tauri::command]
+fn set_external_snap(enabled: bool, state: tauri::State<'_, Arc<Shared>>) {
+    state.external_requested.store(enabled, Ordering::Release);
+    state.external_revision.fetch_add(1, Ordering::AcqRel);
+    *state.external_error.lock().unwrap() = None;
+    let _ = state.wake.try_send(());
 }
 fn apply(host: &mut Host, effects: Vec<Effect>) -> Result<()> {
     for effect in effects {
@@ -163,6 +173,7 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
             );
             library::save_selection(shared, selected_model);
             let mut applied_scale = shared.scale.load(Ordering::Acquire);
+            let mut external_seen = 0;
             let mut revision = shared.revision.load(Ordering::Acquire);
             let mut applied_visible = core.state().visible;
             let mut next_ping = Instant::now() + Duration::from_secs(1);
@@ -210,6 +221,7 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
                                 )?;
                                 applied_visible = core.state().visible;
                                 applied_scale = shared.scale.load(Ordering::Acquire);
+                                external_seen = 0;
                                 *shared.import_error.lock().unwrap() = None;
                                 shared.report("ready", "角色切换完成", Some(host.id()));
                             }
@@ -244,6 +256,20 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
                         },
                         Some(host.id()),
                     );
+                }
+                let external_revision = shared.external_revision.load(Ordering::Acquire);
+                if external_revision != external_seen {
+                    let enabled = shared.external_requested.load(Ordering::Acquire);
+                    match host.desktop(DesktopCommand::SetExternalSnapEnabled(enabled)) {
+                        Ok(()) => *shared.external_error.lock().unwrap() = None,
+                        Err(error) => {
+                            shared.external_requested.store(false, Ordering::Release);
+                            *shared.external_error.lock().unwrap() = Some(format!(
+                                "他应用吸附未启用：{error:#}。检查辅助功能权限后可再次打开。"
+                            ));
+                        }
+                    }
+                    external_seen = external_revision;
                 }
                 // A wake-up rechecks emergency atomics immediately; timeout is
                 // the heartbeat cadence, not a per-frame busy poll.
@@ -317,6 +343,9 @@ fn run() -> Result<()> {
         scale: AtomicU16::new(100),
         importing: AtomicBool::new(false),
         import_error: Mutex::new(None),
+        external_requested: AtomicBool::new(false),
+        external_revision: AtomicU64::new(0),
+        external_error: Mutex::new(None),
         visible: AtomicBool::new(true),
         revision: AtomicU64::new(0),
         retry: AtomicU64::new(0),
@@ -340,6 +369,7 @@ fn run() -> Result<()> {
             library::import_pack,
             library::select_pack,
             library::set_scale,
+            set_external_snap,
             library::preferences
         ])
         .on_window_event(|window, event| {
@@ -419,6 +449,9 @@ mod tests {
                 scale: AtomicU16::new(100),
                 importing: AtomicBool::new(false),
                 import_error: Mutex::new(None),
+                external_requested: AtomicBool::new(false),
+                external_revision: AtomicU64::new(0),
+                external_error: Mutex::new(None),
                 visible: AtomicBool::new(true),
                 revision: AtomicU64::new(0),
                 retry: AtomicU64::new(0),
@@ -591,5 +624,29 @@ mod tests {
             library::legacy_model_upgrade(raw, Some(bundled), |_| anyhow::bail!("broken pack"))
                 .is_err()
         );
+    }
+    #[test]
+    fn rejected_external_permission_keeps_screen_pet_running() {
+        let fixture = Fixture::new("deny_external");
+        let (shared, rx) = controls();
+        let worker = fixture.start(shared.clone(), rx);
+        wait_for(&shared, |status| status.phase == "ready");
+        let pid = shared.status.lock().unwrap().host_pid;
+        shared.external_requested.store(true, Ordering::Release);
+        shared.external_revision.fetch_add(1, Ordering::AcqRel);
+        let _ = shared.wake.try_send(());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while shared.external_error.lock().unwrap().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "permission denial was not reported"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!shared.external_requested.load(Ordering::Acquire));
+        assert_eq!(shared.status.lock().unwrap().host_pid, pid);
+        assert_eq!(shared.status.lock().unwrap().phase, "ready");
+        shared.request("quit").unwrap();
+        worker.join().unwrap();
     }
 }
