@@ -196,14 +196,17 @@ impl ApplicationHandler<Control> for AvatarHost {
             return;
         }
         let now = Instant::now();
-        if now >= state.next_external_check {
+        let revision = state.ax_probe.revision();
+        if now >= state.next_external_check || revision != state.last_external_revision {
             state.maintain_external();
+            state.last_external_revision = revision;
             state.next_external_check = now + Duration::from_millis(250);
         }
         if let Err(error) = state.sample_input() {
             self.fail(event_loop, error);
             return;
         }
+        state.ax_probe.set_following(state.external_snap.attached());
         if now >= state.next_frame {
             state.window.request_redraw();
             state.next_frame += Duration::from_secs_f64(1. / 30.);
@@ -276,6 +279,7 @@ struct State {
     external_snap: crate::external_snap::ExternalSnap,
     external_enabled: bool,
     next_external_check: Instant,
+    last_external_revision: u64,
     metrics: crate::metrics::Metrics,
     animation: crate::animation::Animation,
     gaze_target: [f32; 2],
@@ -461,6 +465,7 @@ impl State {
             external_snap: Default::default(),
             external_enabled: false,
             next_external_check: Instant::now(),
+            last_external_revision: 0,
             metrics: Default::default(),
             animation: Default::default(),
             gaze_target: [0.0; 2],
@@ -951,9 +956,14 @@ impl State {
         let current = crate::platform::desktop(&self.window)
             .ok()
             .map(|result| result.0);
+        let observation = self.ax_probe.latest_with_timing();
         let destination = current.and_then(|window| {
-            self.external_snap
-                .follow(window, self.perch_ratio, trusted, self.ax_probe.latest())
+            self.external_snap.follow(
+                window,
+                self.perch_ratio,
+                trusted,
+                observation.map(|value| value.0),
+            )
         });
         match destination {
             Some(destination) => {
@@ -966,6 +976,13 @@ impl State {
                 if let Err(error) = crate::platform::move_to(&self.window, destination) {
                     eprintln!("external follow: {error:#}");
                     self.detach_external();
+                } else if let Some((target, sample_age_ms, notification_age_ms)) = observation {
+                    pet_ipc::event_log!(
+                        "{}",
+                        json!({"event":"external_follow","pid":target.pid,"window":target.window,
+                            "sample_age_ms":sample_age_ms,"notification_to_move_ms":notification_age_ms,
+                            "x":destination.x,"y":destination.y})
+                    );
                 }
             }
             None => {
