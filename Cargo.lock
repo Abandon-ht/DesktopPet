@@ -181,6 +181,7 @@ dependencies = [
  "pet-ipc",
  "pet-protocol",
  "pollster",
+ "serde",
  "serde_json",
  "wgpu",
  "winit",

@@ -1,0 +1,53 @@
+# P1-04 眨眼、视线与位置恢复
+
+实现日期：2026-09-19。代码与自动化检查完成，人工验收待进行；P1-03 人工验收已获用户确认通过；P1-02 的六项结果继续有效。
+
+## 本步实现与边界
+
+- 宿主使用角色包的 blink_left/right、gaze_x/y、head_x/y 映射，实现间隔眨眼、平滑视线和轻微头部跟随。拖动期间降低跟随幅度；隐藏时暂停动画和输入采样，恢复时不累计隐藏时间。没有对应映射的原始模型保持原行为。
+- 每帧从默认参数重建，先施加跟随，再播放点击表情；表情占用眼睛参数时不叠加自动眨眼。保留中立姿态视口，避免表情改变模型包围盒导致整体缩放。
+- 原有拖拽锁增加重复序列回归；悬停退出有 6 逻辑点余量，语义点击仍使用原多边形。靠近角色及拖拽时约 60 Hz 采样，远处约 30 Hz；高速点击是否漏接仍需实际验证。
+- AppKit 工作区统一转换为顶部原点的逻辑坐标，支持负坐标。松开拖拽后保存显示器标识、归一化位置和脚底贴边状态；重启、缩放、工作区变化时恢复，目标屏不存在时退回主屏。工作区每秒检查一次，拖拽中不主动纠正位置。
+- 显示器标识目前是 NSScreenNumber 与名称组合，非持久 UUID；重启或重连后标识改变可能触发主屏回退。脚底吸附沿用已有实现，未新增左右及顶部角色锚点吸附；AX 他应用吸附留到 P1-05。
+- 以 30 fps 为调度目标，最多保存最近 1800 帧样本。正常退出或切换宿主时写入应用数据目录的 render-metrics.json，包含 CPU 提交耗时及 present 调用间隔 p95。它们不是 GPU 完成时间或实际屏幕呈现时间，也不是已达到帧率目标的证明。
+
+位置存储：`~/Library/Application Support/dev.desktoppet.alpha/placement.json`，使用临时文件加 rename。无效配置忽略，不阻止模型加载。角色包及测量结果不入 Git。
+
+## 用户验收
+
+先退出旧开发版，再启动已更新的本地应用：
+
+```sh
+open "/Users/ncy/Projects/DesktopPet/artifacts/local/p1/DesktopPet Dev.app"
+```
+
+菜单栏 **Pet → 角色与设置…**，导入下面的新包（旧包不自动补充视线映射）：
+
+```text
+/Users/ncy/Projects/DesktopPet/artifacts/local/p1/nahida-motion-pack/manifest.json
+```
+
+1. **动画**：静置约 20 秒观察眨眼；缓慢绕角色移动鼠标，眼睛及头部应平滑跟随。点击头/身体后表情正常结束，眼睛不应因眨眼明显抖动。隐藏数秒再显示，动画无突跳。
+2. **缩放与拖拽**：50%、100%、150% 分别点击、拖拽，检查角色边缘和透明区域。拖拽松开不触发表情；下方应用的透明区点击正常。放到工作区底部后缩放，脚底贴边应保持。
+3. **重启位置**：拖到容易辨认的位置，松手后退出重开；角色、大小和位置应恢复。底部贴边位置也重复一次。
+4. **多屏与恢复**：有外屏时，跨不同 DPI 显示器拖动（包含主屏左侧或上方），拔掉角色所在外屏应回到主屏；检查 Dock 工作区变化、切换 Space 和睡眠唤醒。没有相应条件时记为未测。
+5. **持续交互**：填写 `artifacts/local/p1/p1-04-interactions.csv` 的 100 项清单，记录漏接、误吞、穿透或拖拽异常。该文件仅是待填写清单，生成脚本不会操作鼠标，不代表 100 次测试已通过。
+
+完成后反馈编号及结果；多屏/100 次交互尚未完成可以单独注明。正常运行至少一分钟并退出后，可读取上述 render-metrics.json 辅助后续性能分析；完整性能和能耗验收仍属于 P1-06。
+
+## 自动化与复现
+
+全工作区 73 项 Rust 测试、Clippy（-D warnings）、格式检查及 release 构建通过。新增覆盖眨眼周期/时间跳变、视线平滑/拖拽幅度、负坐标/混合 DPI 逻辑坐标恢复、缺屏回退/脚底缩放锚点、无效配置、悬停余量以及重复输入序列。
+
+真实原生隐藏窗口通过五组生命周期检查，以及使用缺失显示器配置的恢复/缩放检查（实际位置与请求值误差小于 2 逻辑点）。此检查没有物理拔屏，不验证真实 DPI 切换、可见动画、100 次桌面交互或帧率。
+
+```sh
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo fmt --all --check
+cargo build --release --locked -p desktop-pet -p avatar-host-2d
+python3 tools/p1/verify-hidden-host.py target/release/avatar-host-2d artifacts/local/p1/nahida-motion-pack/manifest.json
+python3 tools/p1/verify-placement.py target/release/avatar-host-2d artifacts/local/p1/nahida-motion-pack/manifest.json
+```
+
+本地包由 `tools/p1/prepare-local-pack.py` 生成，并为本轮赋予独立 id/name；仅复制已有本地资源及添加参数映射，不改变授权。检查日志与开发应用位于被忽略的 `artifacts/local/p1/`。重新生成手工清单可用 `python3 tools/p1/interaction-checklist.py`，已有清单会被保留而不覆盖。

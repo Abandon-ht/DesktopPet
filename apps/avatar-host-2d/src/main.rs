@@ -1,6 +1,9 @@
+mod animation;
 mod audit;
 mod composite;
 mod input;
+mod metrics;
+mod placement;
 mod platform;
 mod snap;
 mod window;

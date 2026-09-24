@@ -1,6 +1,6 @@
 # DesktopPet：架构与分阶段开发设计
 
-设计日期：2026-09-16。目标：macOS 首发，Rust 为主要开发语言，后续支持 Windows、Linux。当前包含设计文档、P0 原生验证工具与 P1 开发版应用；P0 Gate 已通过，P1-02 已通过用户桌面验收；P1-03 角色包、大小和点击反馈已实现，待新增交互验收。
+设计日期：2026-09-16。目标：macOS 首发，Rust 为主要开发语言，后续支持 Windows、Linux。当前包含设计文档、P0 原生验证工具与 P1 开发版应用；P0 Gate 已通过，P1-02 已通过用户桌面验收；P1-03 角色包已获用户确认通过；P1-04 眨眼、视线和位置恢复已实现，待新增交互验收。
 
 建议先使用本地纳西妲 Live2D 资源，采用 **Tauri 2 + Rust 业务核心 + 独立 Mocari 0.3.1/wgpu 渲染进程**。语音先通过 sherpa-onnx 和 LM Studio 建立本地闭环，再引入 CosyVoice 等可替换推理服务。三维角色走独立 GLB/Bevy 适配路径。
 
@@ -26,7 +26,7 @@
 
 开发入口：[P0 原生验证工具](tools/p0-probe/README.md)与 [Tauri 进程桥接试件](tools/p0-tauri-probe/README.md)。P0-01 至 P0-06 已按本机技术试件条件通过，包括角色目视验收、原生输入/透明、进程生命周期、三屏及 AX 观察、30 分钟稳定性；P1 基础 macOS 桌宠已进入分步实现与验收。[路线图](docs/05-roadmap.md)中的产品延迟、内存、帧率仍是验收目标；实际成绩及边界见 [P0 实测记录](docs/07-p0-validation.md)，不代表完整应用成绩。
 
-P1 开发入口：`apps/desktop` 为托盘及状态面板，`apps/avatar-host-2d` 为独立渲染宿主。可运行本地开发版，已支持目录角色包导入、切换、大小设置及头/身体点击表情；自动眨眼与视线仍在后续步骤。请按 [P1-03 五项验收说明](docs/11-p1-03-avatar-packs.md) 测试；实现边界见 [P1 分步记录](docs/09-p1-implementation.md)。
+P1 开发入口：`apps/desktop` 为托盘及状态面板，`apps/avatar-host-2d` 为独立渲染宿主。可运行本地开发版，已支持目录角色包导入、切换、大小设置及头/身体点击表情；现已加入自动眨眼、视线跟随与位置恢复。请按 [P1-04 验收说明](docs/12-p1-04-local-interaction.md) 测试；实现边界见 [P1 分步记录](docs/09-p1-implementation.md)。
 
 ## 视频封面
 

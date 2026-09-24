@@ -60,3 +60,22 @@ mod tests {
         assert!(!input.sample(370., 168., 500., 600., false));
     }
 }
+
+#[cfg(test)]
+mod p1_tests {
+    use super::*;
+    #[test]
+    fn hundred_sequences_preserve_passthrough_and_drag_ownership() {
+        let mut input = Input::default();
+        for _ in 0..100 {
+            assert!(!input.sample_region(false, false));
+            assert!(!input.sample_region(true, true)); // A press originating elsewhere is not ours.
+            assert!(input.sample_region(true, false));
+            input.press();
+            assert!(input.sample_region(false, true));
+            assert!(input.dragging);
+            assert!(!input.sample_region(false, false));
+            assert!(!input.dragging);
+        }
+    }
+}

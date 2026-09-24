@@ -29,7 +29,7 @@ try:
                          body=[[.34,.43],[.66,.43],[.66,.9],[.34,.9]],anchor=[.5,.9625]),
         actions=dict(head_pat=dict(expression='model/Happy1.exp3.json',duration_ms=1200),
                      body_tap=dict(expression='model/Shy.exp3.json',duration_ms=1200)),
-        parameter_map=dict(mouth_open='ParamMouthOpenY',blink_left='ParamEyeLOpen',blink_right='ParamEyeROpen'),
+        parameter_map=dict(mouth_open='ParamMouthOpenY',blink_left='ParamEyeLOpen',blink_right='ParamEyeROpen',gaze_x='ParamEyeBallX',gaze_y='ParamEyeBallY',head_x='ParamAngleX',head_y='ParamAngleY'),
         license=dict(status='unverified',redistributable=False))
     (output/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
 except Exception:

@@ -180,8 +180,12 @@ impl ApplicationHandler<Control> for AvatarHost {
         let Some(state) = &mut self.state else {
             return;
         };
+        if Instant::now() >= state.next_desktop_check {
+            state.maintain_desktop();
+            state.next_desktop_check = Instant::now() + Duration::from_secs(1);
+        }
         if !state.visible {
-            event_loop.set_control_flow(ControlFlow::Wait);
+            event_loop.set_control_flow(ControlFlow::WaitUntil(state.next_desktop_check));
             return;
         }
         let now = Instant::now();
@@ -191,11 +195,18 @@ impl ApplicationHandler<Control> for AvatarHost {
         }
         if now >= state.next_frame {
             state.window.request_redraw();
-            state.next_frame = now + Duration::from_secs_f64(1. / 30.);
+            state.next_frame += Duration::from_secs_f64(1. / 30.);
+            if state.next_frame <= now {
+                state.next_frame = now + Duration::from_secs_f64(1. / 30.);
+            }
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(
-            state.next_frame.min(now + Duration::from_millis(16)),
-        ));
+        event_loop.set_control_flow(ControlFlow::WaitUntil(state.next_frame.min(
+            now + Duration::from_millis(if state.pointer_near || state.input.dragging {
+                16
+            } else {
+                33
+            }),
+        )));
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         let Some(state) = &mut self.state else {
@@ -216,6 +227,13 @@ impl ApplicationHandler<Control> for AvatarHost {
                     &state.queue,
                     &fit_bounds(state.neutral_bounds, size.width, size.height),
                 );
+                if state.restored && !state.input.dragging {
+                    state.restore_placement();
+                }
+                Ok(())
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                state.next_desktop_check = Instant::now();
                 Ok(())
             }
             WindowEvent::MouseInput {
@@ -241,6 +259,15 @@ impl ApplicationHandler<Control> for AvatarHost {
 }
 
 struct State {
+    metrics: crate::metrics::Metrics,
+    animation: crate::animation::Animation,
+    gaze_target: [f32; 2],
+    layout_path: Option<PathBuf>,
+    placement: Option<crate::placement::Saved>,
+    screens: Vec<crate::placement::Screen>,
+    next_desktop_check: Instant,
+    restored: bool,
+    pointer_near: bool,
     pack: Option<avatar_pack::Pack>,
     feedbacks: Vec<(
         pet_protocol::Feedback,
@@ -251,11 +278,7 @@ struct State {
     last_animation: Instant,
     pose_dirty: bool,
     events: Vec<pet_protocol::AvatarEvent>,
-    pressed: Option<(
-        pet_protocol::HitRegion,
-        winit::dpi::PhysicalPosition<i32>,
-        Instant,
-    )>,
+    pressed: Option<(pet_protocol::HitRegion, [f64; 2], Instant)>,
     neutral_bounds: [f32; 4],
     snap_enabled: bool,
     anchor_ratio: f64,
@@ -402,7 +425,24 @@ impl State {
             "{}",
             json!({"event": "ready", "adapter": format!("{:?}", adapter.get_info()), "alpha_modes": format!("{:?}", caps.alpha_modes), "selected_alpha": format!("{:?}", config.alpha_mode), "format": format!("{:?}", config.format), "initialization_ms": started.elapsed().as_secs_f64() * 1000., "monitors": monitors, "passthrough": passthrough, "ax_trusted": crate::platform::ax_trusted(), "clipping_contexts": plan.contexts().len()})
         );
+        let layout_path = std::env::var_os("DESKTOPPET_LAYOUT").map(PathBuf::from);
+        let placement = layout_path
+            .as_ref()
+            .and_then(|p| avatar_pack::read_json::<crate::placement::Saved>(p).ok())
+            .filter(|s| s.valid());
+        let screens = crate::platform::desktop(&window)
+            .map(|(_, screens, _)| screens)
+            .unwrap_or_default();
         Ok(Self {
+            metrics: Default::default(),
+            animation: Default::default(),
+            gaze_target: [0.0; 2],
+            layout_path,
+            placement,
+            screens,
+            next_desktop_check: Instant::now(),
+            restored: false,
+            pointer_near: false,
             pack,
             feedbacks,
             active: None,
@@ -443,13 +483,20 @@ impl State {
                 .window
                 .inner_size()
                 .to_logical::<f64>(self.window.scale_factor());
+            self.gaze_target = [
+                ((x / size.width - 0.5) * 2.0).clamp(-1.0, 1.0) as f32,
+                ((0.3 - y / size.height) * 2.0).clamp(-1.0, 1.0) as f32,
+            ];
+            self.pointer_near =
+                x >= -100.0 && y >= -100.0 && x <= size.width + 100.0 && y <= size.height + 100.0;
             let previous = self.input.receiving;
             let receiving = if let Some(pack) = &self.pack {
                 self.input.sample_region(
-                    pack.manifest
-                        .interaction
-                        .hit([x / size.width, y / size.height])
-                        .is_some(),
+                    pack.manifest.interaction.near(
+                        [x / size.width, y / size.height],
+                        [size.width, size.height],
+                        if previous { 6.0 } else { 0.0 },
+                    ),
                     down,
                 )
             } else {
@@ -459,10 +506,9 @@ impl State {
                 && !self.input.dragging
                 && let Some((region, origin, started)) = self.pressed.take()
             {
-                let current = self.window.outer_position()?;
-                let tolerance = 4.0 * self.window.scale_factor();
-                let unmoved = (f64::from(current.x - origin.x)).abs() <= tolerance
-                    && (f64::from(current.y - origin.y)).abs() <= tolerance;
+                let (current, _, _) = crate::platform::desktop(&self.window)?;
+                let unmoved =
+                    (current.x - origin[0]).abs() <= 4.0 && (current.y - origin[1]).abs() <= 4.0;
                 let still_hit = self.pack.as_ref().and_then(|p| {
                     p.manifest
                         .interaction
@@ -484,7 +530,10 @@ impl State {
                 );
             }
             if self.snap_enabled && was_dragging && !self.input.dragging {
-                crate::platform::snap_floor(&self.window, self.anchor_ratio)?;
+                if let Err(error) = crate::platform::snap_floor(&self.window, self.anchor_ratio) {
+                    eprintln!("screen snap unavailable: {error:#}");
+                }
+                self.remember_placement();
             }
         }
         Ok(())
@@ -497,9 +546,47 @@ impl State {
             .as_secs_f32()
             .min(0.1);
         self.last_animation = now;
-        if self.active.is_some() || self.pose_dirty {
+        let procedural = self.pack.as_ref().is_some_and(|p| {
+            [
+                "blink_left",
+                "blink_right",
+                "gaze_x",
+                "gaze_y",
+                "head_x",
+                "head_y",
+            ]
+            .iter()
+            .any(|key| p.manifest.parameter_map.contains_key(*key))
+        });
+        let pose = self
+            .animation
+            .tick(delta, self.gaze_target, self.input.dragging);
+        if self.active.is_some() || self.pose_dirty || procedural {
             let runtime = self.model.runtime_mut();
             runtime.reset_parameters();
+            if let Some(pack) = &self.pack {
+                for (key, value, amplitude) in [
+                    ("gaze_x", pose.gaze[0], 0.8),
+                    ("gaze_y", pose.gaze[1], 0.8),
+                    ("head_x", pose.gaze[0], 0.25),
+                    ("head_y", pose.gaze[1], 0.25),
+                ] {
+                    if let Some(id) = pack.manifest.parameter_map.get(key)
+                        && let Some(info) = runtime.parameter_info(id)
+                    {
+                        let center = info.default();
+                        let value = center
+                            + value
+                                * amplitude
+                                * if value >= 0.0 {
+                                    info.maximum() - center
+                                } else {
+                                    center - info.minimum()
+                                };
+                        runtime.set_parameter(id, value);
+                    }
+                }
+            }
             if let Some((player, duration)) = &mut self.active {
                 player.tick(delta);
                 if player.time() * 1000.0 >= *duration as f32 && !player.is_fading_out() {
@@ -509,6 +596,23 @@ impl State {
                     self.active = None;
                 } else {
                     player.apply(runtime);
+                }
+            }
+            if let Some(pack) = &self.pack {
+                for key in ["blink_left", "blink_right"] {
+                    if let Some(id) = pack.manifest.parameter_map.get(key) {
+                        let owned = self.active.as_ref().is_some_and(|(p, _)| {
+                            p.expression()
+                                .parameters()
+                                .iter()
+                                .any(|parameter| parameter.id() == id)
+                        });
+                        if !owned && let Some(info) = runtime.parameter_info(id) {
+                            let value =
+                                info.minimum() + (info.default() - info.minimum()) * pose.eye_open;
+                            runtime.set_parameter(id, value);
+                        }
+                    }
                 }
             }
             runtime.update_meshes().context("mesh update failed")?;
@@ -586,6 +690,7 @@ impl State {
         self.queue.submit([encoder.finish()]);
         self.window.pre_present_notify();
         self.queue.present(frame);
+        self.metrics.presented(now);
         Ok(())
     }
     fn begin_press(&mut self) {
@@ -595,7 +700,7 @@ impl State {
         if let (Some(pack), Some((x, y, _)), Ok(origin)) = (
             &self.pack,
             crate::platform::pointer(&self.window),
-            self.window.outer_position(),
+            crate::platform::desktop(&self.window),
         ) {
             let size = self
                 .window
@@ -605,7 +710,7 @@ impl State {
                 .manifest
                 .interaction
                 .hit([x / size.width, y / size.height])
-                .map(|r| (r, origin, Instant::now()));
+                .map(|r| (r, [origin.0.x, origin.0.y], Instant::now()));
         }
     }
     fn avatar(&mut self, command: pet_protocol::AvatarCommand) -> Result<()> {
@@ -647,6 +752,73 @@ impl State {
         ));
         Ok(())
     }
+    fn restore_placement(&mut self) {
+        if let Some(saved) = &self.placement
+            && let Ok((window, screens, _)) = crate::platform::desktop(&self.window)
+            && let Some(target) =
+                saved.restore(&screens, [window.width, window.height], self.anchor_ratio)
+        {
+            match crate::platform::move_to(&self.window, target) {
+                Err(error) => eprintln!("position restore: {error:#}"),
+                Ok(()) => {
+                    if let Ok((actual, _, monitor)) = crate::platform::desktop(&self.window) {
+                        pet_ipc::event_log!(
+                            "{}",
+                            json!({"event":"position_restored","monitor":monitor,"requested":[target.x,target.y],"actual":[actual.x,actual.y]})
+                        );
+                    }
+                }
+            }
+        }
+    }
+    fn remember_placement(&mut self) {
+        if let Ok((window, screens, id)) = crate::platform::desktop(&self.window)
+            && let Some(screen) = screens.iter().find(|s| s.id == id)
+        {
+            let saved = crate::placement::Saved::capture(window, screen, self.anchor_ratio);
+            if self.placement.as_ref() == Some(&saved) {
+                return;
+            }
+            self.placement = Some(saved.clone());
+            if let Some(path) = &self.layout_path {
+                let result = (|| -> Result<()> {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    let temp = path.with_extension(format!("{}.tmp", std::process::id()));
+                    std::fs::write(&temp, serde_json::to_vec_pretty(&saved)?)?;
+                    std::fs::rename(temp, path)?;
+                    Ok(())
+                })();
+                if let Err(error) = result {
+                    eprintln!("position save: {error:#}");
+                }
+            }
+        }
+    }
+    fn maintain_desktop(&mut self) {
+        if self.input.dragging {
+            return;
+        }
+        if let Ok((window, screens, id)) = crate::platform::desktop(&self.window)
+            && screens != self.screens
+        {
+            self.screens = screens;
+            if self.placement.is_none()
+                && let Some(screen) = self.screens.iter().find(|s| s.id == id)
+            {
+                self.placement = Some(crate::placement::Saved::capture(
+                    window,
+                    screen,
+                    self.anchor_ratio,
+                ));
+            }
+            self.restore_placement();
+            if self.restored {
+                self.remember_placement();
+            }
+        }
+    }
     fn set_visible(&mut self, visible: bool) -> Result<()> {
         self.pressed = None;
         self.events.clear();
@@ -654,6 +826,12 @@ impl State {
         self.pose_dirty = true;
         self.window.set_cursor_hittest(false)?;
         self.input = crate::input::Input::default();
+        if !self.restored {
+            self.restore_placement();
+            self.restored = true;
+        }
+        self.last_animation = Instant::now();
+        self.metrics.pause();
         self.visible = visible;
         self.window.set_visible(visible);
         self.next_frame = Instant::now();
@@ -662,6 +840,24 @@ impl State {
             json!({"event":"visibility_applied","visible":visible})
         );
         Ok(())
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        let report = self.metrics.report();
+        pet_ipc::event_log!(
+            "{}",
+            serde_json::json!({"event":"render_metrics","metrics":report})
+        );
+        if report["presented_frames"].as_u64().unwrap_or(0) > 0
+            && let Some(path) = &self.layout_path
+        {
+            let path = path.with_file_name("render-metrics.json");
+            if let Ok(bytes) = serde_json::to_vec_pretty(&report) {
+                let _ = std::fs::write(path, bytes);
+            }
+        }
     }
 }
 

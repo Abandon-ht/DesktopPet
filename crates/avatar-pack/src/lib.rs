@@ -153,6 +153,38 @@ impl Manifest {
     }
 }
 impl Interaction {
+    /// Retain hover within a small logical-pixel margin; actual clicks still use hit().
+    pub fn near(&self, point: [f64; 2], viewport: [f64; 2], margin: f64) -> bool {
+        if self.hit(point).is_some() {
+            return true;
+        }
+        if margin <= 0.0
+            || !margin.is_finite()
+            || !viewport.iter().all(|v| v.is_finite() && *v > 0.0)
+        {
+            return false;
+        }
+        for polygon in [&self.head, &self.body] {
+            for i in 0..polygon.len() {
+                let a = polygon[i];
+                let b = polygon[(i + 1) % polygon.len()];
+                let edge = [(b[0] - a[0]) * viewport[0], (b[1] - a[1]) * viewport[1]];
+                let p = [
+                    (point[0] - a[0]) * viewport[0],
+                    (point[1] - a[1]) * viewport[1],
+                ];
+                let length = edge[0] * edge[0] + edge[1] * edge[1];
+                if length <= 0.0 {
+                    continue;
+                }
+                let t = ((p[0] * edge[0] + p[1] * edge[1]) / length).clamp(0.0, 1.0);
+                if (p[0] - t * edge[0]).powi(2) + (p[1] - t * edge[1]).powi(2) <= margin * margin {
+                    return true;
+                }
+            }
+        }
+        false
+    }
     pub fn hit(&self, point: [f64; 2]) -> Option<HitRegion> {
         if inside(&self.head, point) {
             Some(HitRegion::Head)
@@ -634,5 +666,15 @@ mod tests {
             v["license"]["redistributable"] = true.into();
         });
         assert!(open(&f.manifest()).is_err());
+    }
+    #[test]
+    fn hover_margin_is_logical_pixels_without_expanding_click_regions() {
+        let f = Fixture::new();
+        let pack = open(&f.manifest()).unwrap();
+        let regions = &pack.manifest.interaction;
+        assert_eq!(regions.hit([0.29, 0.2]), None);
+        assert!(regions.near([0.29, 0.2], [500.0, 600.0], 6.0));
+        assert!(!regions.near([0.29, 0.2], [1000.0, 1200.0], 6.0));
+        assert!(!regions.near([0.29, 0.2], [500.0, 600.0], 0.0));
     }
 }

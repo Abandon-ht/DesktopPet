@@ -138,6 +138,9 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
             );
             let mut command = Command::new(&executable);
             command.arg(selected_model);
+            if let Some(directory) = shared.library.lock().unwrap().as_ref() {
+                command.env("DESKTOPPET_LAYOUT", directory.join("placement.json"));
+            }
             let mut host = Host::start(&mut command, Duration::from_secs(5))?;
             // Ordinary requests use a shorter bound after renderer startup.
             host.set_timeout(Duration::from_secs(2))?;
@@ -176,6 +179,9 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
                         let candidate = (|| -> Result<Host> {
                             let mut command = Command::new(&executable);
                             command.arg(&path);
+                            if let Some(directory) = shared.library.lock().unwrap().as_ref() {
+                                command.env("DESKTOPPET_LAYOUT", directory.join("placement.json"));
+                            }
                             let mut candidate = Host::start(&mut command, Duration::from_secs(5))?;
                             candidate.set_timeout(Duration::from_secs(2))?;
                             candidate.desktop(DesktopCommand::SetScale(

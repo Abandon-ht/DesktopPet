@@ -92,3 +92,89 @@ pub fn pointer(_: &winit::window::Window) -> Option<(f64, f64, bool)> {
 pub fn ax_trusted() -> Option<bool> {
     None
 }
+
+/// Snapshot the native window and every work area in one logical coordinate system.
+#[cfg(target_os = "macos")]
+pub fn desktop(
+    window: &winit::window::Window,
+) -> anyhow::Result<(crate::snap::Rect, Vec<crate::placement::Screen>, String)> {
+    use anyhow::Context;
+    use objc2_app_kit::{NSScreen, NSView};
+    use objc2_foundation::{MainThreadMarker, NSNumber, ns_string};
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let mtm = MainThreadMarker::new().context("desktop snapshot requires main thread")?;
+    let RawWindowHandle::AppKit(handle) = window.window_handle()?.as_raw() else {
+        anyhow::bail!("AppKit required");
+    };
+    unsafe {
+        let native = (&*handle.ns_view.as_ptr().cast::<NSView>())
+            .window()
+            .context("missing window")?;
+        let screens = NSScreen::screens(mtm);
+        let primary = screens.iter().next().context("no screens")?.frame();
+        let top = primary.origin.y + primary.size.height;
+        let rect = |r: objc2_foundation::NSRect| {
+            crate::snap::Rect {
+                x: r.origin.x,
+                y: r.origin.y,
+                width: r.size.width,
+                height: r.size.height,
+            }
+            .flip_y(top)
+        };
+        let identity = |screen: &NSScreen| -> anyhow::Result<String> {
+            let info = screen.deviceDescription();
+            let number = info
+                .objectForKey(ns_string!("NSScreenNumber"))
+                .context("missing display number")?;
+            // AppKit specifies NSScreenNumber as NSNumber; dictionary is OS-owned.
+            let id = (&*std::ptr::from_ref(&*number).cast::<NSNumber>()).unsignedIntValue();
+            Ok(format!("{id}:{}", screen.localizedName()))
+        };
+        let mut result = Vec::new();
+        for screen in screens.iter() {
+            result.push(crate::placement::Screen {
+                id: identity(screen)?,
+                work: rect(screen.visibleFrame()),
+                scale: screen.backingScaleFactor(),
+            });
+        }
+        let current = native
+            .screen()
+            .map(|s| identity(&s))
+            .transpose()?
+            .unwrap_or_else(|| result[0].id.clone());
+        Ok((rect(native.frame()), result, current))
+    }
+}
+#[cfg(target_os = "macos")]
+pub fn move_to(window: &winit::window::Window, target: crate::snap::Rect) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use objc2_app_kit::{NSScreen, NSView};
+    use objc2_foundation::{MainThreadMarker, NSPoint};
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let mtm = MainThreadMarker::new().context("move requires main thread")?;
+    let RawWindowHandle::AppKit(handle) = window.window_handle()?.as_raw() else {
+        anyhow::bail!("AppKit required");
+    };
+    unsafe {
+        let native = (&*handle.ns_view.as_ptr().cast::<NSView>())
+            .window()
+            .context("missing window")?;
+        let screens = NSScreen::screens(mtm);
+        let primary = screens.iter().next().context("no screens")?.frame();
+        let target = target.flip_y(primary.origin.y + primary.size.height);
+        native.setFrameOrigin(NSPoint::new(target.x, target.y));
+    }
+    Ok(())
+}
+#[cfg(not(target_os = "macos"))]
+pub fn desktop(
+    _: &winit::window::Window,
+) -> anyhow::Result<(crate::snap::Rect, Vec<crate::placement::Screen>, String)> {
+    anyhow::bail!("desktop placement requires macOS")
+}
+#[cfg(not(target_os = "macos"))]
+pub fn move_to(_: &winit::window::Window, _: crate::snap::Rect) -> anyhow::Result<()> {
+    anyhow::bail!("desktop placement requires macOS")
+}
