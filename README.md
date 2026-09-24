@@ -29,6 +29,8 @@
 
 P1 开发入口：`apps/desktop` 为托盘及状态面板，`apps/avatar-host-2d` 为独立渲染宿主。可运行本地开发版，已支持目录角色包导入、切换、大小设置及头/身体点击表情；现已加入自动眨眼、视线跟随与位置恢复。请按 [P1-04 验收说明](docs/12-p1-04-local-interaction.md) 测试；实现边界见 [P1 分步记录](docs/09-p1-implementation.md)。
 
+若曾保存原始 `.model3.json` 路径，新版会在启动时优先迁移到开发包内有效的 `manifest.json` 并保留大小设置；已选择角色包的用户保持原选择。旧程序运行期间仍可从“角色与设置…”手动导入新包。
+
 ## 视频封面
 
 - [宽屏重新构图封面（1672 × 941，约 16:9）](assets/covers/desktoppet-cover-16x9-native.png)

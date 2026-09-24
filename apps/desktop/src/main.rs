@@ -352,7 +352,7 @@ fn run() -> Result<()> {
             let directory = app.path().app_data_dir()?;
             std::fs::create_dir_all(&directory)?;
             *setup_shared.library.lock().unwrap() = Some(directory.clone());
-            library::restore(&setup_shared, &directory);
+            library::restore(&setup_shared, &directory, model.as_deref());
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let show = MenuItem::with_id(app, "show", "显示角色", true, None::<&str>)?;
@@ -558,11 +558,38 @@ mod tests {
         shared.scale.store(75, Ordering::Release);
         library::save_selection(&shared, &fixture.0.join("model"));
         let (restored, _) = controls();
-        library::restore(&restored, &fixture.0);
+        library::restore(&restored, &fixture.0, None);
         assert_eq!(restored.scale.load(Ordering::Acquire), 75);
         assert_eq!(
             *restored.requested.lock().unwrap(),
             Some(fixture.0.join("model"))
+        );
+    }
+    #[test]
+    fn legacy_raw_selection_upgrades_only_with_a_bundled_pack() {
+        use std::path::Path;
+        let raw = Path::new("/tmp/Nahida.model3.json");
+        let bundled = Path::new("/tmp/manifest.json");
+        let imported = PathBuf::from("/private/packs/manifest.json");
+        assert_eq!(
+            library::legacy_model_upgrade(raw, Some(bundled), |_| Ok(imported.clone())).unwrap(),
+            Some(imported.clone())
+        );
+        assert!(
+            library::legacy_model_upgrade(&imported, Some(bundled), |_| {
+                panic!("imported selection must be preserved")
+            })
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            library::legacy_model_upgrade(raw, None, |_| panic!("no bundled pack"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            library::legacy_model_upgrade(raw, Some(bundled), |_| anyhow::bail!("broken pack"))
+                .is_err()
         );
     }
 }

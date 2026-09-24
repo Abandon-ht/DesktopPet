@@ -26,14 +26,51 @@ fn directory(shared: &Shared) -> Result<PathBuf, String> {
         .clone()
         .ok_or_else(|| "角色库尚未初始化".into())
 }
-pub fn restore(shared: &Shared, directory: &std::path::Path) {
+pub(super) fn legacy_model_upgrade(
+    selected: &std::path::Path,
+    bundled: Option<&std::path::Path>,
+    import: impl FnOnce(&std::path::Path) -> Result<PathBuf>,
+) -> Result<Option<PathBuf>> {
+    let is_raw_model = selected
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().ends_with(".model3.json"));
+    let Some(bundled) =
+        bundled.filter(|path| path.file_name().is_some_and(|n| n == "manifest.json"))
+    else {
+        return Ok(None);
+    };
+    if is_raw_model {
+        return import(bundled).map(Some);
+    }
+    Ok(None)
+}
+pub fn restore(shared: &Shared, directory: &std::path::Path, bundled: Option<&std::path::Path>) {
     if let Ok(saved) = avatar_pack::read_json::<Saved>(&directory.join("preferences.json"))
         && saved.version == 1
         && (50..=150).contains(&saved.scale)
         && saved.selected.is_file()
     {
-        *shared.requested.lock().unwrap() = Some(saved.selected);
         shared.scale.store(saved.scale, Ordering::Release);
+        let selected = match legacy_model_upgrade(&saved.selected, bundled, |path| {
+            avatar_pack::import(path, &directory.join("packs"))
+        }) {
+            Ok(Some(pack)) => {
+                pet_ipc::event_log!(
+                    "{}",
+                    serde_json::json!({"event":"legacy_model_upgraded","pack":pack})
+                );
+                save_selection(shared, &pack);
+                pack
+            }
+            Ok(None) => saved.selected,
+            Err(error) => {
+                *shared.import_error.lock().unwrap() = Some(format!(
+                    "旧模型尚未升级为角色包：{error:#}。可在“角色与设置”中手动导入。"
+                ));
+                saved.selected
+            }
+        };
+        *shared.requested.lock().unwrap() = Some(selected);
     }
 }
 pub fn save_selection(shared: &Shared, path: &std::path::Path) {
