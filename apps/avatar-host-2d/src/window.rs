@@ -130,6 +130,9 @@ impl ApplicationHandler<Control> for AvatarHost {
                         Command::Desktop(DesktopCommand::SetScale(scale)) => {
                             state.set_scale(scale)?
                         }
+                        Command::Desktop(DesktopCommand::SetWindowPerch(percent)) => {
+                            state.set_window_perch(percent)?
+                        }
                         Command::Shutdown => state.set_visible(false)?,
                         Command::Desktop(DesktopCommand::SetVisible(visible)) => {
                             state.set_visible(visible)?
@@ -293,6 +296,7 @@ struct State {
     neutral_bounds: [f32; 4],
     snap_enabled: bool,
     anchor_ratio: f64,
+    perch_ratio: f64,
     backend: wgpu::Backend,
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
@@ -410,6 +414,10 @@ impl State {
             .as_ref()
             .map(|p| p.manifest.interaction.anchor[1])
             .unwrap_or((0.5 + (bounds[3] - bounds[1]) * sy * 0.25) as f64);
+        let perch_ratio = pack
+            .as_ref()
+            .map(|p| p.manifest.interaction.window_perch_y)
+            .unwrap_or(avatar_pack::default_window_perch_y());
         let textures = model
             .textures()
             .iter()
@@ -468,6 +476,7 @@ impl State {
             neutral_bounds: bounds,
             snap_enabled: cfg!(target_os = "macos"),
             anchor_ratio,
+            perch_ratio,
             backend,
             window,
             surface,
@@ -552,6 +561,7 @@ impl State {
                     && let Some(destination) = self.external_snap.release(
                         window,
                         self.anchor_ratio,
+                        self.perch_ratio,
                         crate::platform::ax_trusted() == Some(true),
                         std::process::id() as i32,
                         &[target],
@@ -575,6 +585,9 @@ impl State {
                     && let Err(error) = crate::platform::snap_floor(&self.window, self.anchor_ratio)
                 {
                     eprintln!("screen snap unavailable: {error:#}");
+                }
+                if !attached {
+                    pet_ipc::event_log!("{}", json!({"event":"external_not_attached"}));
                 }
                 self.remember_placement();
             }
@@ -796,6 +809,14 @@ impl State {
         ));
         Ok(())
     }
+    fn set_window_perch(&mut self, percent: u16) -> Result<()> {
+        anyhow::ensure!(
+            (20..=80).contains(&percent),
+            "window perch must be 20–80 percent"
+        );
+        self.perch_ratio = f64::from(percent) / 100.0;
+        Ok(())
+    }
     fn restore_placement(&mut self) {
         if let Some(saved) = &self.placement
             && let Ok((window, screens, _)) = crate::platform::desktop(&self.window)
@@ -918,7 +939,7 @@ impl State {
             .map(|result| result.0);
         let destination = current.and_then(|window| {
             self.external_snap
-                .follow(window, self.anchor_ratio, trusted, self.ax_probe.latest())
+                .follow(window, self.perch_ratio, trusted, self.ax_probe.latest())
         });
         match destination {
             Some(destination) => {
@@ -935,6 +956,10 @@ impl State {
             }
             None => {
                 self.detach_external();
+                pet_ipc::event_log!(
+                    "{}",
+                    json!({"event":"external_detached","reason":"target_unavailable_or_focus_changed"})
+                );
                 self.fall_to_screen();
             }
         }

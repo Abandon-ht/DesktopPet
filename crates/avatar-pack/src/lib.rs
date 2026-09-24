@@ -39,6 +39,12 @@ pub struct Interaction {
     pub head: Vec<[f64; 2]>,
     pub body: Vec<[f64; 2]>,
     pub anchor: [f64; 2],
+    /// Window top crosses this normalized height of the pet viewport.
+    #[serde(default = "default_window_perch_y")]
+    pub window_perch_y: f64,
+}
+pub const fn default_window_perch_y() -> f64 {
+    0.5
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -138,6 +144,11 @@ impl Manifest {
                 .iter()
                 .all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
             "invalid anchor"
+        );
+        ensure!(
+            self.interaction.window_perch_y.is_finite()
+                && (0.2..=0.8).contains(&self.interaction.window_perch_y),
+            "window_perch_y must be 0.2–0.8"
         );
         ensure!(self.parameter_map.len() <= 32, "too many mapped parameters");
         for action in [&self.actions.head_pat, &self.actions.body_tap]

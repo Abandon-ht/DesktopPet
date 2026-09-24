@@ -84,6 +84,13 @@
           },
           "minItems": 2,
           "maxItems": 2
+        },
+        "window_perch_y": {
+          "type": "number",
+          "minimum": 0.2,
+          "maximum": 0.8,
+          "default": 0.5,
+          "description": "Normalized vertical contact line for another app window top, independent of the floor foot anchor."
         }
       }
     },

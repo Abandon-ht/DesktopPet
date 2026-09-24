@@ -69,6 +69,8 @@ pub enum DesktopCommand {
     SetVisible(bool),
     /// Percentage of the base 500x600 logical viewport (50..=150).
     SetScale(u16),
+    /// Normalized window contact height in percent (20..=80).
+    SetWindowPerch(u16),
     /// Host chooses a nearby valid target on release; no per-frame IPC.
     SetExternalSnapEnabled(bool),
     Detach,

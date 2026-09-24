@@ -5,3 +5,5 @@
 将 `manifest.example.json` 复制到自己的独立角色包目录并改名为 `manifest.json`，添加自己有权使用的模型文件，再按 `schemas/avatar-pack-v1.schema.json` 配置。模板缺少模型，不能直接导入运行。
 
 坐标是顶部为原点、5:6 宠物视口的归一化值；头与身体使用严格凸多边形，头区域优先。锚点和区域必须按自己的角色校准，不是 Live2D Drawable ID。两项动作可为 null，不支持的点击反馈会直接跳过。
+
+`interaction.anchor` 仍用于屏幕底部的脚底位置；可选的 `interaction.window_perch_y` 控制其他应用窗口的上沿穿过角色的高度，范围 0.2–0.8，省略时为 0.5。用户可以在设置面板为每个角色微调该高度；微调保存在本机设置中，不修改角色包。

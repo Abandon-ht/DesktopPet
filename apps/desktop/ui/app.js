@@ -37,6 +37,14 @@ document.querySelector('#switch').addEventListener('click', async () => {
 const scale = document.querySelector('#scale');
 const externalSnap = document.querySelector('#external-snap');
 const externalMessage = document.querySelector('#external-message');
+const perch = document.querySelector('#window-perch');
+const perchValue = document.querySelector('#window-perch-value');
+let perchEditing = false;
+perch.addEventListener('pointerdown', () => { perchEditing = true; });
+perch.addEventListener('pointerup', () => { perchEditing = false; });
+perch.addEventListener('pointercancel', () => { perchEditing = false; });
+perch.addEventListener('keydown', () => { perchEditing = true; });
+perch.addEventListener('keyup', () => { perchEditing = false; });
 const externalHint = externalMessage.textContent;
 function showExternalPreference(p) {
   externalSnap.checked = p.external_snap;
@@ -50,11 +58,16 @@ scale.addEventListener('input', () => document.querySelector('#scale-value').tex
 scale.addEventListener('change', async () => {
   try {await invoke('set_scale',{scale:Number(scale.value)});} catch (error) {message.textContent = String(error);}
 });
+perch.addEventListener('input', () => { perchValue.textContent = `${perch.value}%`; });
+perch.addEventListener('change', async () => {
+  try { await invoke('set_window_perch', {percent: Number(perch.value)}); }
+  catch (error) { externalMessage.textContent = String(error); }
+});
 (async () => {
-  try { await updatePacks(); const p = await invoke('preferences'); scale.value = p.scale; showExternalPreference(p); document.querySelector('#scale-value').textContent = `${p.scale}%`; }
+  try { await updatePacks(); const p = await invoke('preferences'); scale.value = p.scale; perch.value = p.window_perch; perchValue.textContent = `${p.window_perch}%`; showExternalPreference(p); document.querySelector('#scale-value').textContent = `${p.scale}%`; }
   catch (error) {message.textContent=String(error);}
 })();
 setInterval(async () => {
-  try { const p = await invoke('preferences'); if (p.error) message.textContent = p.error; showExternalPreference(p); }
+  try { const p = await invoke('preferences'); if (p.error) message.textContent = p.error; showExternalPreference(p); if (!perchEditing) { perch.value = p.window_perch; perchValue.textContent = `${p.window_perch}%`; } }
   catch (_) {}
 },1000);

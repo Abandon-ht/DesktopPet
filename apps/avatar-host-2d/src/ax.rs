@@ -31,10 +31,11 @@ impl Probe {
         let (enabled_worker, stop_worker, latest_worker) =
             (enabled.clone(), stop.clone(), latest.clone());
         let worker = std::thread::spawn(move || {
+            let mut focused = native::FocusedProbe::default();
             while !stop_worker.load(Ordering::Acquire) {
                 if enabled_worker.load(Ordering::Acquire) {
                     let target = if crate::platform::ax_trusted() == Some(true) {
-                        native::focused_window()
+                        focused.sample(std::process::id() as i32)
                     } else {
                         None
                     };
@@ -111,6 +112,7 @@ mod native {
         fn CFRelease(value: Ref);
         fn CFGetTypeID(value: Ref) -> usize;
         fn CFHash(value: Ref) -> usize;
+        fn CFEqual(a: Ref, b: Ref) -> u8;
         fn CFBooleanGetTypeID() -> usize;
         fn CFBooleanGetValue(value: Ref) -> u8;
     }
@@ -173,31 +175,63 @@ mod native {
             .then_some(rect)
     }
 
-    pub fn focused_window() -> Option<Target> {
-        let system = Owned::new(unsafe { AXUIElementCreateSystemWide() })?;
-        unsafe { AXUIElementSetMessagingTimeout(system.0, 0.2) };
-        let app = system.attribute(b"AXFocusedApplication\0")?;
-        if unsafe { CFGetTypeID(app.0) } != unsafe { AXUIElementGetTypeID() } {
-            return None;
+    #[derive(Default)]
+    pub struct FocusedProbe {
+        tracked: Option<Owned>,
+        pid: i32,
+        id: u64,
+    }
+
+    impl FocusedProbe {
+        pub fn sample(&mut self, own_pid: i32) -> Option<Target> {
+            let system = Owned::new(unsafe { AXUIElementCreateSystemWide() })?;
+            unsafe { AXUIElementSetMessagingTimeout(system.0, 0.2) };
+            let app = system.attribute(b"AXFocusedApplication\0")?;
+            if unsafe { CFGetTypeID(app.0) } != unsafe { AXUIElementGetTypeID() } {
+                return None;
+            }
+            unsafe { AXUIElementSetMessagingTimeout(app.0, 0.2) };
+            let mut pid = 0;
+            if unsafe { AXUIElementGetPid(app.0, &mut pid) } != 0 || pid <= 0 {
+                return None;
+            }
+            // The pet can become focused while it is being dragged. Keep observing
+            // the previously focused external window until another window takes focus.
+            if pid == own_pid {
+                let tracked = self.tracked.as_ref()?;
+                return target(tracked, self.pid, self.id);
+            }
+            let window = app.attribute(b"AXFocusedWindow\0")?;
+            if unsafe { CFGetTypeID(window.0) } != unsafe { AXUIElementGetTypeID() } {
+                return None;
+            }
+            unsafe { AXUIElementSetMessagingTimeout(window.0, 0.2) };
+            let same = self.pid == pid
+                && self
+                    .tracked
+                    .as_ref()
+                    .is_some_and(|old| unsafe { CFEqual(old.0, window.0) != 0 });
+            let id = if same {
+                self.id
+            } else {
+                (unsafe { CFHash(window.0) }) as u64
+            };
+            self.pid = pid;
+            self.id = id;
+            self.tracked = Some(window);
+            target(self.tracked.as_ref()?, pid, id)
         }
-        unsafe { AXUIElementSetMessagingTimeout(app.0, 0.2) };
-        let mut pid = 0;
-        if unsafe { AXUIElementGetPid(app.0, &mut pid) } != 0 || pid <= 0 {
-            return None;
-        }
-        let window = app.attribute(b"AXFocusedWindow\0")?;
-        if unsafe { CFGetTypeID(window.0) } != unsafe { AXUIElementGetTypeID() } {
-            return None;
-        }
-        unsafe { AXUIElementSetMessagingTimeout(window.0, 0.2) };
+    }
+
+    fn target(window: &Owned, pid: i32, id: u64) -> Option<Target> {
         let minimized = window
             .attribute(b"AXMinimized\0")
             .filter(|value| unsafe { CFGetTypeID(value.0) } == unsafe { CFBooleanGetTypeID() })
             .is_some_and(|value| unsafe { CFBooleanGetValue(value.0) != 0 });
         Some(Target {
             pid,
-            window: unsafe { CFHash(window.0) } as u64,
-            bounds: geometry(&window)?,
+            window: id,
+            bounds: geometry(window)?,
             minimized,
         })
     }
@@ -206,7 +240,11 @@ mod native {
 #[cfg(not(target_os = "macos"))]
 mod native {
     use super::Target;
-    pub fn focused_window() -> Option<Target> {
-        None
+    #[derive(Default)]
+    pub struct FocusedProbe;
+    impl FocusedProbe {
+        pub fn sample(&mut self, _: i32) -> Option<Target> {
+            None
+        }
     }
 }

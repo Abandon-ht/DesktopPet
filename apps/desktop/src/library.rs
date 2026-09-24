@@ -11,10 +11,13 @@ struct Saved {
     version: u32,
     selected: PathBuf,
     scale: u16,
+    #[serde(default)]
+    perch_overrides: BTreeMap<String, u16>,
 }
 #[derive(Serialize)]
 pub struct Preferences {
     scale: u16,
+    window_perch: u16,
     importing: bool,
     error: Option<String>,
     external_snap: bool,
@@ -53,6 +56,11 @@ pub fn restore(shared: &Shared, directory: &std::path::Path, bundled: Option<&st
         && saved.selected.is_file()
     {
         shared.scale.store(saved.scale, Ordering::Release);
+        *shared.perch_overrides.lock().unwrap() = saved
+            .perch_overrides
+            .into_iter()
+            .filter(|(_, percent)| (20..=80).contains(percent))
+            .collect();
         let selected = match legacy_model_upgrade(&saved.selected, bundled, |path| {
             avatar_pack::import(path, &directory.join("packs"))
         }) {
@@ -72,18 +80,38 @@ pub fn restore(shared: &Shared, directory: &std::path::Path, bundled: Option<&st
                 saved.selected
             }
         };
-        *shared.requested.lock().unwrap() = Some(selected);
+        *shared.requested.lock().unwrap() = Some(selected.clone());
+        shared
+            .perch
+            .store(perch_for(shared, &selected), Ordering::Release);
     }
+}
+pub(super) fn perch_for(shared: &Shared, path: &std::path::Path) -> u16 {
+    let manifest = avatar_pack::read_json::<avatar_pack::Manifest>(path).ok();
+    let Some(manifest) = manifest else { return 50 };
+    shared
+        .perch_overrides
+        .lock()
+        .unwrap()
+        .get(&manifest.id)
+        .copied()
+        .unwrap_or_else(|| {
+            (manifest.interaction.window_perch_y * 100.0)
+                .round()
+                .clamp(20.0, 80.0) as u16
+        })
 }
 pub fn save_selection(shared: &Shared, path: &std::path::Path) {
     let Ok(directory) = directory(shared) else {
         return;
     };
+    let _write = shared.preferences_write.lock().unwrap();
     let save = (|| -> Result<()> {
         let saved = Saved {
             version: 1,
             selected: path.to_owned(),
             scale: shared.scale.load(Ordering::Acquire),
+            perch_overrides: shared.perch_overrides.lock().unwrap().clone(),
         };
         let temp = directory.join("preferences.tmp");
         std::fs::write(&temp, serde_json::to_vec_pretty(&saved)?)?;
@@ -98,6 +126,7 @@ pub fn save_selection(shared: &Shared, path: &std::path::Path) {
 pub fn preferences(state: tauri::State<'_, Arc<Shared>>) -> Preferences {
     Preferences {
         scale: state.scale.load(Ordering::Acquire),
+        window_perch: state.perch.load(Ordering::Acquire),
         importing: state.importing.load(Ordering::Acquire),
         error: state.import_error.lock().unwrap().clone(),
         external_snap: state.external_requested.load(Ordering::Acquire),
@@ -180,6 +209,24 @@ pub fn set_scale(scale: u16, state: tauri::State<'_, Arc<Shared>>) -> Result<(),
         return Err("大小范围为 50%–150%".into());
     }
     state.scale.store(scale, Ordering::Release);
+    let _ = state.wake.try_send(());
+    Ok(())
+}
+#[tauri::command]
+pub fn set_window_perch(percent: u16, state: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
+    if !(20..=80).contains(&percent) {
+        return Err("窗口接触高度范围为 20%–80%".into());
+    }
+    let path = state.active.lock().unwrap().clone().ok_or("请先加载角色")?;
+    let manifest = avatar_pack::read_json::<avatar_pack::Manifest>(&path)
+        .map_err(|_| "当前角色不支持单独保存窗口高度".to_string())?;
+    state
+        .perch_overrides
+        .lock()
+        .unwrap()
+        .insert(manifest.id, percent);
+    state.perch.store(percent, Ordering::Release);
+    save_selection(&state, &path);
     let _ = state.wake.try_send(());
     Ok(())
 }

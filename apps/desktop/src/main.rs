@@ -5,6 +5,7 @@ use pet_ipc::supervisor::{Host, RestartBudget};
 use pet_protocol::{AvatarEvent, DesktopCommand, DesktopEvent};
 use serde::Serialize;
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     process::Command,
     sync::{
@@ -30,8 +31,12 @@ struct Status {
 struct Shared {
     library: Mutex<Option<PathBuf>>,
     requested: Mutex<Option<PathBuf>>,
+    active: Mutex<Option<PathBuf>>,
     selection: AtomicU64,
     scale: AtomicU16,
+    perch: AtomicU16,
+    perch_overrides: Mutex<BTreeMap<String, u16>>,
+    preferences_write: Mutex<()>,
     importing: AtomicBool,
     import_error: Mutex<Option<String>>,
     external_requested: AtomicBool,
@@ -154,8 +159,15 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
             let mut host = Host::start(&mut command, Duration::from_secs(5))?;
             // Ordinary requests use a shorter bound after renderer startup.
             host.set_timeout(Duration::from_secs(2))?;
+            shared.perch.store(
+                library::perch_for(shared, selected_model),
+                Ordering::Release,
+            );
             host.desktop(DesktopCommand::SetScale(
                 shared.scale.load(Ordering::Acquire),
+            ))?;
+            host.desktop(DesktopCommand::SetWindowPerch(
+                shared.perch.load(Ordering::Acquire),
             ))?;
             let capabilities = host.avatar_capabilities;
             core.update(Event::Desktop(DesktopEvent::Stopped));
@@ -172,7 +184,9 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
                 Some(host.id()),
             );
             library::save_selection(shared, selected_model);
+            *shared.active.lock().unwrap() = Some(selected_model.clone());
             let mut applied_scale = shared.scale.load(Ordering::Acquire);
+            let mut applied_perch = shared.perch.load(Ordering::Acquire);
             let mut external_seen = 0;
             let mut revision = shared.revision.load(Ordering::Acquire);
             let mut applied_visible = core.state().visible;
@@ -198,6 +212,9 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
                             candidate.desktop(DesktopCommand::SetScale(
                                 shared.scale.load(Ordering::Acquire),
                             ))?;
+                            candidate.desktop(DesktopCommand::SetWindowPerch(
+                                library::perch_for(shared, &path),
+                            ))?;
                             Ok(candidate)
                         })();
                         match candidate {
@@ -209,6 +226,10 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
                                 let old = std::mem::replace(&mut host, candidate);
                                 let _ = old.shutdown();
                                 model = Some(path.clone());
+                                *shared.active.lock().unwrap() = Some(path.clone());
+                                shared
+                                    .perch
+                                    .store(library::perch_for(shared, &path), Ordering::Release);
                                 library::save_selection(shared, &path);
                                 core.update(Event::Desktop(DesktopEvent::Stopped));
                                 core.update(Event::Intent(Intent::SetVisible(
@@ -221,6 +242,7 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
                                 )?;
                                 applied_visible = core.state().visible;
                                 applied_scale = shared.scale.load(Ordering::Acquire);
+                                applied_perch = shared.perch.load(Ordering::Acquire);
                                 external_seen = 0;
                                 *shared.import_error.lock().unwrap() = None;
                                 shared.report("ready", "角色切换完成", Some(host.id()));
@@ -239,6 +261,11 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
                     if let Some(path) = &model {
                         library::save_selection(shared, path);
                     }
+                }
+                let perch = shared.perch.load(Ordering::Acquire);
+                if perch != applied_perch {
+                    host.desktop(DesktopCommand::SetWindowPerch(perch))?;
+                    applied_perch = perch;
                 }
                 let new_revision = shared.revision.load(Ordering::Acquire);
                 let visible = shared.visible.load(Ordering::Acquire);
@@ -344,8 +371,12 @@ fn run() -> Result<()> {
     let shared = Arc::new(Shared {
         library: Mutex::new(None),
         requested: Mutex::new(None),
+        active: Mutex::new(None),
         selection: AtomicU64::new(0),
         scale: AtomicU16::new(100),
+        perch: AtomicU16::new(50),
+        perch_overrides: Mutex::new(BTreeMap::new()),
+        preferences_write: Mutex::new(()),
         importing: AtomicBool::new(false),
         import_error: Mutex::new(None),
         external_requested: AtomicBool::new(false),
@@ -374,6 +405,7 @@ fn run() -> Result<()> {
             library::import_pack,
             library::select_pack,
             library::set_scale,
+            library::set_window_perch,
             set_external_snap,
             library::preferences
         ])
@@ -459,8 +491,12 @@ mod tests {
             Arc::new(Shared {
                 library: Mutex::new(None),
                 requested: Mutex::new(None),
+                active: Mutex::new(None),
                 selection: AtomicU64::new(0),
                 scale: AtomicU16::new(100),
+                perch: AtomicU16::new(50),
+                perch_overrides: Mutex::new(BTreeMap::new()),
+                preferences_write: Mutex::new(()),
                 importing: AtomicBool::new(false),
                 import_error: Mutex::new(None),
                 external_requested: AtomicBool::new(false),
@@ -611,6 +647,37 @@ mod tests {
             *restored.requested.lock().unwrap(),
             Some(fixture.0.join("model"))
         );
+    }
+    #[test]
+    fn window_perch_overrides_remain_independent_per_role_after_restart() {
+        let fixture = Fixture::new("normal");
+        let first = fixture.0.join("first.json");
+        let second = fixture.0.join("second.json");
+        let mut manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../assets/demo/pack-template/manifest.example.json"
+        ))
+        .unwrap();
+        std::fs::write(&first, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        manifest["id"] = serde_json::json!("second-role");
+        std::fs::write(&second, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let (shared, _) = controls();
+        *shared.library.lock().unwrap() = Some(fixture.0.clone());
+        shared
+            .perch_overrides
+            .lock()
+            .unwrap()
+            .insert("demo-template".into(), 36);
+        shared
+            .perch_overrides
+            .lock()
+            .unwrap()
+            .insert("second-role".into(), 62);
+        shared.perch.store(36, Ordering::Release);
+        library::save_selection(&shared, &first);
+        let (restored, _) = controls();
+        library::restore(&restored, &fixture.0, None);
+        assert_eq!(restored.perch.load(Ordering::Acquire), 36);
+        assert_eq!(library::perch_for(&restored, &second), 62);
     }
     #[test]
     fn legacy_raw_selection_upgrades_only_with_a_bundled_pack() {
