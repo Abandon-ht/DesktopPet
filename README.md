@@ -16,6 +16,7 @@
 | [P0 实测记录](docs/07-p0-validation.md) | 固定版本构建、纳西妲参数/表情、透明 Surface、短时基线和待测项 |
 | [P1 分步实现](docs/09-p1-implementation.md) | 核心契约、托盘与宿主实现进度；角色导入和平台验收清单 |
 | [P1-05 他应用吸附](docs/13-p1-05-external-snap.md) | 实验开关、AX 焦点窗口读取、权限和后续验收 |
+| [P1-06 alpha 桌面验收](docs/14-p1-06-alpha-validation.md) | 分组测试、日志采集与结果记录 |
 
 关键结论：
 
