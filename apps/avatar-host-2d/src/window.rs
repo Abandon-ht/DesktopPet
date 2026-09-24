@@ -19,7 +19,7 @@ use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
     event::{ElementState, MouseButton, WindowEvent},
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     window::{Window, WindowId, WindowLevel},
 };
 
@@ -55,6 +55,7 @@ pub fn run(entry: &Path) -> Result<()> {
         .with_activate_ignoring_other_apps(false);
     let event_loop = builder.build()?;
     let proxy = event_loop.create_proxy();
+    let follow_proxy = proxy.clone();
     std::thread::spawn(move || {
         let result = pet_ipc::server::serve_with(
             &mut std::io::stdin().lock(),
@@ -77,6 +78,7 @@ pub fn run(entry: &Path) -> Result<()> {
     let mut app = AvatarHost {
         entry,
         pack,
+        follow_proxy,
         state: None,
         error: None,
     };
@@ -93,12 +95,14 @@ enum Control {
         pet_ipc::server::Command,
         std::sync::mpsc::SyncSender<Result<serde_json::Value, String>>,
     ),
+    AxUpdated,
     Stop(Result<(), String>),
 }
 
 struct AvatarHost {
     entry: PathBuf,
     pack: Option<avatar_pack::Pack>,
+    follow_proxy: EventLoopProxy<Control>,
     state: Option<State>,
     error: Option<anyhow::Error>,
 }
@@ -150,6 +154,14 @@ impl ApplicationHandler<Control> for AvatarHost {
                 })();
                 let _ = reply.send(result.map_err(|e| format!("{e:#}")));
             }
+            Control::AxUpdated => {
+                if let Some(state) = &mut self.state {
+                    let revision = state.ax_probe.revision();
+                    if revision != state.last_external_revision {
+                        state.apply_external_update(revision, "wake");
+                    }
+                }
+            }
             Control::Stop(result) => {
                 if let Err(error) = result {
                     self.error = Some(anyhow::anyhow!(error));
@@ -176,7 +188,12 @@ impl ApplicationHandler<Control> for AvatarHost {
             .with_accepts_first_mouse(true);
         let result = (|| {
             let window = Arc::new(event_loop.create_window(attributes)?);
-            pollster::block_on(State::new(window, &self.entry, self.pack.clone()))
+            pollster::block_on(State::new(
+                window,
+                &self.entry,
+                self.pack.clone(),
+                self.follow_proxy.clone(),
+            ))
         })();
         match result {
             Ok(state) => self.state = Some(state),
@@ -198,9 +215,7 @@ impl ApplicationHandler<Control> for AvatarHost {
         let now = Instant::now();
         let revision = state.ax_probe.revision();
         if now >= state.next_external_check || revision != state.last_external_revision {
-            state.maintain_external();
-            state.last_external_revision = revision;
-            state.next_external_check = now + Duration::from_millis(250);
+            state.apply_external_update(revision, "loop");
         }
         if let Err(error) = state.sample_input() {
             self.fail(event_loop, error);
@@ -330,6 +345,7 @@ impl State {
         window: Arc<Window>,
         entry: &Path,
         pack: Option<avatar_pack::Pack>,
+        follow_proxy: EventLoopProxy<Control>,
     ) -> Result<Self> {
         let started = Instant::now();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -461,7 +477,9 @@ impl State {
             .map(|(_, screens, _)| screens)
             .unwrap_or_default();
         Ok(Self {
-            ax_probe: crate::ax::Probe::new(),
+            ax_probe: crate::ax::Probe::new(move || {
+                let _ = follow_proxy.send_event(Control::AxUpdated);
+            }),
             external_snap: Default::default(),
             external_enabled: false,
             next_external_check: Instant::now(),
@@ -948,7 +966,12 @@ impl State {
         self.ax_probe.set_enabled(enabled && self.visible);
         Ok(())
     }
-    fn maintain_external(&mut self) {
+    fn apply_external_update(&mut self, revision: u64, trigger: &'static str) {
+        self.maintain_external(trigger);
+        self.last_external_revision = revision;
+        self.next_external_check = Instant::now() + Duration::from_millis(250);
+    }
+    fn maintain_external(&mut self, trigger: &'static str) {
         if !self.external_snap.attached() || self.input.dragging || !self.visible {
             return;
         }
@@ -981,7 +1004,7 @@ impl State {
                         "{}",
                         json!({"event":"external_follow","pid":target.pid,"window":target.window,
                             "sample_age_ms":sample_age_ms,"notification_to_move_ms":notification_age_ms,
-                            "x":destination.x,"y":destination.y})
+                            "x":destination.x,"y":destination.y,"trigger":trigger})
                     );
                 }
             }

@@ -28,7 +28,7 @@ pub struct Probe {
 }
 
 impl Probe {
-    pub fn new() -> Self {
+    pub fn new(on_change: impl Fn() + Send + 'static) -> Self {
         let enabled = Arc::new(AtomicBool::new(false));
         let following = Arc::new(AtomicBool::new(false));
         let following_changed = Arc::new(AtomicBool::new(false));
@@ -74,7 +74,8 @@ impl Probe {
                     }
                     let sampled_at = Instant::now();
                     let mut latest = latest_worker.lock().unwrap();
-                    if latest.as_ref().and_then(|value| value.target) != target {
+                    let changed = latest.as_ref().and_then(|value| value.target) != target;
+                    if changed {
                         revision_worker.fetch_add(1, Ordering::Release);
                     }
                     *latest = Some(Observation {
@@ -82,6 +83,10 @@ impl Probe {
                         target,
                         notification_at,
                     });
+                    drop(latest);
+                    if changed && following_worker.load(Ordering::Acquire) {
+                        on_change();
+                    }
                     last_sample = sampled_at;
                     next_poll = sampled_at + Duration::from_millis(250);
                     continue;
