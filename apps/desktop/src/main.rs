@@ -317,17 +317,22 @@ fn monitor(shared: &Shared, wake: mpsc::Receiver<()>, executable: PathBuf, model
     }
 }
 fn run() -> Result<()> {
-    let executable = std::env::current_exe()?
+    let macos = std::env::current_exe()?
         .parent()
         .context("missing executable directory")?
-        .join("avatar-host-2d");
+        .to_path_buf();
+    let contents = macos.parent().context("missing app contents directory")?;
+    let bundled_host =
+        contents.join("Helpers/DesktopPet Avatar Host.app/Contents/MacOS/avatar-host-2d");
+    let executable = if bundled_host.is_file() {
+        bundled_host
+    } else {
+        macos.join("avatar-host-2d")
+    };
     let model = match std::env::var_os("DESKTOPPET_MODEL") {
         Some(path) => Some(PathBuf::from(path)),
         None => {
-            let config = executable
-                .parent()
-                .context("missing executable directory")?
-                .join("../Resources/model-path.txt");
+            let config = contents.join("Resources/model-path.txt");
             if config.is_file() {
                 Some(PathBuf::from(std::fs::read_to_string(config)?.trim()))
             } else {
@@ -406,6 +411,15 @@ fn run() -> Result<()> {
                     }
                 })
                 .build(app)?;
+            if app
+                .path()
+                .resource_dir()?
+                .join("show-settings-on-launch")
+                .is_file()
+                && let Some(window) = app.get_webview_window("main")
+            {
+                window.show()?;
+            }
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 // A panic must also release the host via Drop and end the app.

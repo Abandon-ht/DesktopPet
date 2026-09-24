@@ -37,6 +37,11 @@ document.querySelector('#switch').addEventListener('click', async () => {
 const scale = document.querySelector('#scale');
 const externalSnap = document.querySelector('#external-snap');
 const externalMessage = document.querySelector('#external-message');
+const externalHint = externalMessage.textContent;
+function showExternalPreference(p) {
+  externalSnap.checked = p.external_snap;
+  externalMessage.textContent = p.external_error || (p.external_snap ? '他应用窗口吸附已开启。' : externalHint);
+}
 externalSnap.addEventListener('change', async () => {
   try { await invoke('set_external_snap', {enabled: externalSnap.checked}); }
   catch (error) { externalMessage.textContent = String(error); externalSnap.checked = false; }
@@ -46,10 +51,10 @@ scale.addEventListener('change', async () => {
   try {await invoke('set_scale',{scale:Number(scale.value)});} catch (error) {message.textContent = String(error);}
 });
 (async () => {
-  try { await updatePacks(); const p = await invoke('preferences'); scale.value = p.scale; externalSnap.checked = p.external_snap; document.querySelector('#scale-value').textContent = `${p.scale}%`; }
+  try { await updatePacks(); const p = await invoke('preferences'); scale.value = p.scale; showExternalPreference(p); document.querySelector('#scale-value').textContent = `${p.scale}%`; }
   catch (error) {message.textContent=String(error);}
 })();
 setInterval(async () => {
-  try { const p = await invoke('preferences'); if (p.error) message.textContent = p.error; externalSnap.checked = p.external_snap; if (p.external_error) externalMessage.textContent = p.external_error; }
+  try { const p = await invoke('preferences'); if (p.error) message.textContent = p.error; showExternalPreference(p); }
   catch (_) {}
 },1000);

@@ -891,10 +891,12 @@ impl State {
     }
     fn set_external_enabled(&mut self, enabled: bool) -> Result<()> {
         if enabled {
-            anyhow::ensure!(
-                crate::platform::ax_trusted() == Some(true),
-                "Accessibility permission is required"
-            );
+            if crate::platform::ax_trusted() != Some(true) {
+                crate::platform::request_ax_trust();
+                bail!(
+                    "请在 macOS 系统隐私设置中允许当前 DesktopPet 测试包及角色宿主，然后重新开启此开关"
+                );
+            }
         } else {
             let was_attached = self.external_snap.attached();
             self.detach_external();

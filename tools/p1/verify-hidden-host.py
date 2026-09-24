@@ -54,7 +54,8 @@ def normal(p):
     command = dict(type='set_visible', payload=False)
     assert exchange(p, 2, 'desktop', command, 'hide')['payload']['accepted']
     assert exchange(p, 3, 'desktop', command, 'hide')['payload']['accepted']
-    assert isinstance(exchange(p, 4, 'desktop', dict(type='set_external_snap_enabled', payload=True))['payload']['accepted'], bool)
+    # Automated hidden checks must never trigger a macOS authorization prompt.
+    assert exchange(p, 4, 'desktop', dict(type='set_external_snap_enabled', payload=False))['payload']['accepted']
     assert exchange(p, 5, 'ping')['type'] == 'pong'
     assert exchange(p, 6, 'desktop', dict(type='set_scale', payload=50))['payload']['accepted']
     assert exchange(p, 7, 'desktop', dict(type='set_scale', payload=150))['payload']['accepted']

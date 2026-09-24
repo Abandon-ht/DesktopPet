@@ -9,6 +9,50 @@ pub fn ax_trusted() -> Option<bool> {
     Some(unsafe { AXIsProcessTrusted() != 0 })
 }
 
+/// Only call after a direct user request to enable external-window snapping.
+/// The system displays its own consent UI asynchronously when untrusted.
+#[cfg(target_os = "macos")]
+pub fn request_ax_trust() -> bool {
+    use std::ffi::c_void;
+    type Ref = *const c_void;
+    #[link(name = "ApplicationServices", kind = "framework")]
+    unsafe extern "C" {
+        static kAXTrustedCheckOptionPrompt: Ref;
+        fn AXIsProcessTrustedWithOptions(options: Ref) -> u8;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        static kCFBooleanTrue: Ref;
+        fn CFDictionaryCreate(
+            allocator: Ref,
+            keys: *const Ref,
+            values: *const Ref,
+            count: isize,
+            key_callbacks: Ref,
+            value_callbacks: Ref,
+        ) -> Ref;
+        fn CFRelease(value: Ref);
+    }
+    unsafe {
+        let key = kAXTrustedCheckOptionPrompt;
+        let value = kCFBooleanTrue;
+        let options = CFDictionaryCreate(
+            std::ptr::null(),
+            &key,
+            &value,
+            1,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+        if options.is_null() {
+            return false;
+        }
+        let trusted = AXIsProcessTrustedWithOptions(options) != 0;
+        CFRelease(options);
+        trusted
+    }
+}
+
 /// Native screen floor snap. Call only after an owned drag release on the main
 /// thread; all positions remain AppKit logical points, including mixed DPI.
 #[cfg(target_os = "macos")]
@@ -91,6 +135,11 @@ pub fn pointer(_: &winit::window::Window) -> Option<(f64, f64, bool)> {
 #[cfg(not(target_os = "macos"))]
 pub fn ax_trusted() -> Option<bool> {
     None
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn request_ax_trust() -> bool {
+    false
 }
 
 /// Snapshot the native window and every work area in one logical coordinate system.
