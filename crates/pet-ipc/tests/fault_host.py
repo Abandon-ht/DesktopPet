@@ -19,7 +19,7 @@ for line in sys.stdin:
     message["type"] = {"hello": "ready", "ping": "pong", "shutdown": "stopped"}[kind]
     message["payload"] = {"capabilities": ["ping", "shutdown"], "max_frame_bytes": 256 * 1024}
     if mode == "wrong_version":
-        message["protocol_version"] = 2
+        message["protocol_version"] = 1
     if mode == "wrong_request":
         message["request_id"] = "unrelated"
     print(json.dumps(message), flush=True)

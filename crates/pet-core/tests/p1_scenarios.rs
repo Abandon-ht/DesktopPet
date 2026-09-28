@@ -1,10 +1,19 @@
 use pet_core::{Activity, Effect, Event, Intent, PetCore};
 use pet_protocol::*;
 
+fn hit(region: HitRegion) -> Event {
+    Event::Avatar(AvatarEvent::Hit(HitDetail {
+        region,
+        point: [500, 500],
+        event_id: 1,
+    }))
+}
+
 fn ready(core: &mut PetCore) {
     core.update(Event::Avatar(AvatarEvent::Ready(AvatarCapabilities {
         head_pat: true,
         body_tap: false,
+        ..Default::default()
     })));
 }
 
@@ -29,22 +38,16 @@ fn hundred_click_drag_sequences_preserve_interaction_rules() {
     ready(&mut core);
     for _ in 0..100 {
         assert_eq!(
-            core.update(Event::Avatar(AvatarEvent::Hit(HitRegion::Head))),
+            core.update(hit(HitRegion::Head)),
             vec![Effect::Avatar(AvatarCommand::PlayFeedback(
                 Feedback::HeadPat
             ))]
         );
         // Unsupported character feedback is a no-op, never an action wait.
-        assert!(
-            core.update(Event::Avatar(AvatarEvent::Hit(HitRegion::Body)))
-                .is_empty()
-        );
+        assert!(core.update(hit(HitRegion::Body)).is_empty());
         core.update(Event::Desktop(DesktopEvent::DragStarted));
         assert_eq!(core.state().activity, Activity::Dragged);
-        assert!(
-            core.update(Event::Avatar(AvatarEvent::Hit(HitRegion::Head)))
-                .is_empty()
-        );
+        assert!(core.update(hit(HitRegion::Head)).is_empty());
         assert!(
             core.update(Event::Desktop(DesktopEvent::DragStarted))
                 .is_empty()
@@ -55,6 +58,42 @@ fn hundred_click_drag_sequences_preserve_interaction_rules() {
         assert_eq!(core.state().activity, Activity::Dragged);
         core.update(Event::Desktop(DesktopEvent::DragEnded));
         assert_eq!(core.state().activity, Activity::Idle);
+    }
+}
+
+#[test]
+fn fine_hit_regions_keep_existing_feedback_semantics() {
+    let mut core = PetCore::default();
+    core.update(Event::Avatar(AvatarEvent::Ready(AvatarCapabilities {
+        head_pat: true,
+        body_tap: true,
+        ..Default::default()
+    })));
+    assert_eq!(
+        core.update(hit(HitRegion::Face)),
+        vec![Effect::Avatar(AvatarCommand::PlayFeedback(
+            Feedback::HeadPat
+        ))]
+    );
+    for region in [
+        HitRegion::LeftHand,
+        HitRegion::RightHand,
+        HitRegion::LeftArm,
+        HitRegion::RightArm,
+        HitRegion::Abdomen,
+        HitRegion::LeftLeg,
+        HitRegion::RightLeg,
+        HitRegion::LeftFoot,
+        HitRegion::RightFoot,
+        HitRegion::UpperBody,
+        HitRegion::LowerBody,
+    ] {
+        assert_eq!(
+            core.update(hit(region)),
+            vec![Effect::Avatar(AvatarCommand::PlayFeedback(
+                Feedback::BodyTap
+            ))]
+        );
     }
 }
 
@@ -79,11 +118,7 @@ fn denied_permission_and_revocation_keep_basic_pet_usable() {
     assert!(!core.state().external_snap_enabled());
     assert!(core.state().ready && core.state().visible);
     assert_eq!(core.state().activity, Activity::Idle);
-    assert!(
-        !core
-            .update(Event::Avatar(AvatarEvent::Hit(HitRegion::Head)))
-            .is_empty()
-    );
+    assert!(!core.update(hit(HitRegion::Head)).is_empty());
     let effects = core.update(Event::Desktop(DesktopEvent::ExternalAttachmentChanged(
         true,
     )));
@@ -133,10 +168,7 @@ fn hide_during_drag_and_restart_preserve_user_intent() {
         Some(&Effect::Desktop(DesktopCommand::SetVisible(false)))
     );
     assert_eq!(core.state().activity, Activity::Idle);
-    assert!(
-        core.update(Event::Avatar(AvatarEvent::Hit(HitRegion::Head)))
-            .is_empty()
-    );
+    assert!(core.update(hit(HitRegion::Head)).is_empty());
     core.update(Event::Desktop(DesktopEvent::Stopped));
     let effects = core.update(Event::Avatar(AvatarEvent::Ready(Default::default())));
     assert!(effects.contains(&Effect::Desktop(DesktopCommand::SetVisible(false))));

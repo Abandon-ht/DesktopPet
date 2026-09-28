@@ -17,6 +17,11 @@
 | [P1 分步实现](docs/09-p1-implementation.md) | 核心契约、托盘与宿主实现进度；角色导入和平台验收清单 |
 | [P1-05 他应用吸附](docs/13-p1-05-external-snap.md) | 实验开关、AX 焦点窗口读取、权限和后续验收 |
 | [P1-06 alpha 桌面验收](docs/14-p1-06-alpha-validation.md) | 分组测试、日志采集与结果记录 |
+| [P2 分步实现](docs/15-p2-implementation.md) | 养成存档与界面、后续行为仲裁和主动陪伴 |
+| [P2 表情编排设计](docs/16-p2-expression-design.md) | 13 个表情的状态／交互映射、切换提示修复和历史验收记录 |
+| [P2 细分点击区域](docs/17-p2-fine-hit-regions.md) | 角色包 v3／v4、12 个细分区与历史校准记录 |
+| [P2 点击反应规划](docs/18-p2-touch-reactions-plan.md) | 各部位表情、关系状态规则、限制区惩罚与测试交接 |
+| [P3 语音流水线设计](docs/19-p3-voice-pipeline.md) | SenseVoice、ZipVoice、扬声器播放、LM Studio 后端与分步验收 |
 
 关键结论：
 
@@ -29,6 +34,8 @@
 开发入口：[P0 原生验证工具](tools/p0-probe/README.md)与 [Tauri 进程桥接试件](tools/p0-tauri-probe/README.md)。P0-01 至 P0-06 已按本机技术试件条件通过，包括角色目视验收、原生输入/透明、进程生命周期、三屏及 AX 观察、30 分钟稳定性；P1 基础 macOS 桌宠已进入分步实现与验收。[路线图](docs/05-roadmap.md)中的产品延迟、内存、帧率仍是验收目标；实际成绩及边界见 [P0 实测记录](docs/07-p0-validation.md)，不代表完整应用成绩。
 
 P1 开发入口：`apps/desktop` 为托盘及状态面板，`apps/avatar-host-2d` 为独立渲染宿主。可运行本地开发版，已支持目录角色包导入、切换、大小设置及头/身体点击表情；现已加入自动眨眼、视线跟随与位置恢复。请按 [P1-04 验收说明](docs/12-p1-04-local-interaction.md) 测试；实现边界见 [P1 分步记录](docs/09-p1-implementation.md)。
+
+P2-01 至 P2-06 已接入喂食、玩耍、休息、SQLite 存档、活动仲裁、受频率控制的主动陪伴、短时占屏、数值驱动表情及细分点击诊断。P2-07 的 12 个细分点击区和上／下半身剩余区惩罚已由用户初步目视确认。开发版将前两次限制区反馈绑定为 `Angry`、第三次绑定为 `Sad2` 黑脸；摸头固定 `Shy`，摸脸在 `shy_normal`／`Wink` 间选择，摸手在 `Shy`／`Happy1` 间选择。亲密度变化、收益冷却和退避规则仍按原设计执行。设置面板已移除三个验收用检查区，实际点击与养成数值刷新仍可用。旧角色包沿用旧反馈，更新后的本地角色包需重新导入。[实现与测试说明](docs/15-p2-implementation.md)、[表情编排](docs/16-p2-expression-design.md)、[点击反应](docs/18-p2-touch-reactions-plan.md)。
 
 若曾保存原始 `.model3.json` 路径，新版会在启动时优先迁移到开发包内有效的 `manifest.json` 并保留大小设置；已选择角色包的用户保持原选择。旧程序运行期间仍可从“角色与设置…”手动导入新包。
 

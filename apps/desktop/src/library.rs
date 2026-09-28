@@ -5,6 +5,11 @@ pub struct PackItem {
     path: String,
     name: String,
 }
+#[derive(Serialize)]
+pub struct SelectionRequest {
+    pub(super) id: u64,
+    pub(super) path: String,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Saved {
@@ -25,6 +30,8 @@ pub struct Preferences {
     error: Option<String>,
     external_snap: bool,
     external_error: Option<String>,
+    active_pack: Option<String>,
+    selection_status: Option<SelectionStatus>,
 }
 const fn default_gaze_radius() -> u16 {
     400
@@ -147,6 +154,13 @@ pub fn preferences(state: tauri::State<'_, Arc<Shared>>) -> Preferences {
         error: state.import_error.lock().unwrap().clone(),
         external_snap: state.external_requested.load(Ordering::Acquire),
         external_error: state.external_error.lock().unwrap().clone(),
+        active_pack: state
+            .active
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned()),
+        selection_status: state.selection_status.lock().unwrap().clone(),
     }
 }
 #[tauri::command]
@@ -172,14 +186,31 @@ pub fn packs(state: tauri::State<'_, Arc<Shared>>) -> Result<Vec<PackItem>, Stri
     items.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(items)
 }
-fn choose(shared: &Shared, path: PathBuf) {
+pub(super) fn choose(shared: &Shared, path: PathBuf) -> SelectionRequest {
     *shared.import_error.lock().unwrap() = None;
-    *shared.requested.lock().unwrap() = Some(path);
-    shared.selection.fetch_add(1, Ordering::AcqRel);
+    let requested = path.to_string_lossy().into_owned();
+    let mut status = shared.selection_status.lock().unwrap();
+    let id = shared.selection.load(Ordering::Acquire) + 1;
+    *shared.requested.lock().unwrap() = Some(path.clone());
+    *status = Some(SelectionStatus {
+        id,
+        phase: "pending".into(),
+        requested: path,
+        error: None,
+    });
+    shared.selection.store(id, Ordering::Release);
+    drop(status);
     let _ = shared.wake.try_send(());
+    SelectionRequest {
+        id,
+        path: requested,
+    }
 }
 #[tauri::command]
-pub fn select_pack(path: String, state: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
+pub fn select_pack(
+    path: String,
+    state: tauri::State<'_, Arc<Shared>>,
+) -> Result<SelectionRequest, String> {
     let library = directory(&state)?
         .join("packs")
         .canonicalize()
@@ -190,29 +221,28 @@ pub fn select_pack(path: String, state: tauri::State<'_, Arc<Shared>>) -> Result
     if !path.starts_with(library) || path.file_name().is_none_or(|n| n != "manifest.json") {
         return Err("请选择已导入的角色包".into());
     }
-    choose(&state, path);
-    Ok(())
+    Ok(choose(&state, path))
 }
 #[tauri::command]
 pub async fn import_pack(
     path: String,
     state: tauri::State<'_, Arc<Shared>>,
-) -> Result<String, String> {
+) -> Result<SelectionRequest, String> {
     let shared = state.inner().clone();
     if shared.importing.swap(true, Ordering::AcqRel) {
         return Err("已有导入正在进行".into());
     }
     let worker = shared.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        let library = directory(&worker)?.join("packs");
-        let path = avatar_pack::import(std::path::Path::new(&path), &library)
-            .map_err(|e| format!("{e:#}"))?;
-        choose(&worker, path.clone());
-        Ok(path.to_string_lossy().into_owned())
-    })
-    .await
-    .map_err(|e| e.to_string())
-    .and_then(|r| r);
+    let result =
+        tauri::async_runtime::spawn_blocking(move || -> Result<SelectionRequest, String> {
+            let library = directory(&worker)?.join("packs");
+            let path = avatar_pack::import(std::path::Path::new(&path), &library)
+                .map_err(|e| format!("{e:#}"))?;
+            Ok(choose(&worker, path))
+        })
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
     shared.importing.store(false, Ordering::Release);
     if let Err(error) = &result {
         *shared.import_error.lock().unwrap() = Some(error.clone());

@@ -4,3 +4,5 @@ section{border-top:1px solid #d9e1d5;margin-top:18px;padding-top:14px}h2{font-si
 
 #window-perch{width:100%;box-sizing:border-box}
 #gaze-radius{width:100%;box-sizing:border-box}
+.care-needs{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:13px}.care-needs span{display:flex;justify-content:space-between;background:#e9efe5;border-radius:6px;padding:8px}.care-needs strong{font-variant-numeric:tabular-nums}#care-message{min-height:18px}
+#companion-interval,#companion-limit{width:100%;box-sizing:border-box;margin-top:4px}#companion-activity{align-self:center}button:disabled{opacity:.5;cursor:wait}

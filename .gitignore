@@ -6,6 +6,8 @@ Thumbs.db
 target/
 node_modules/
 dist/
+__pycache__/
+*.pyc
 
 # Local configuration and model assets
 .env

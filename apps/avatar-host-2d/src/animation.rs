@@ -3,12 +3,14 @@
 pub struct Animation {
     gaze: [f32; 2],
     clock: f32,
+    sway_phase: f32,
     interval: usize,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct Pose {
     pub gaze: [f32; 2],
     pub eye_open: f32,
+    pub sway: f32,
 }
 /// The pointer is in top-left-origin logical coordinates relative to the pet.
 /// Preserve the original gaze direction nearby and fade it to neutral at the
@@ -56,6 +58,7 @@ impl Animation {
             *axis += (value * if dragging { 0.25 } else { 1.0 } - *axis) * alpha;
         }
         let intervals = [3.6, 4.8, 5.4, 4.2];
+        self.sway_phase = (self.sway_phase + dt * 0.9) % std::f32::consts::TAU;
         self.clock += dt;
         let blink_start = intervals[self.interval];
         let t = self.clock - blink_start;
@@ -75,6 +78,7 @@ impl Animation {
         Pose {
             gaze: self.gaze,
             eye_open,
+            sway: self.sway_phase.sin(),
         }
     }
 }
@@ -126,5 +130,19 @@ mod tests {
         let fading = gaze_target([600.0, 180.0], viewport, 400.0)[0];
         assert!(inside > fading && fading > 0.0);
         assert_eq!(gaze_target([f64::NAN, 0.0], viewport, 400.0), [0.0, 0.0]);
+    }
+    #[test]
+    fn idle_sway_remains_bounded_and_continues_between_blinks() {
+        let mut motion = Animation::default();
+        let values: Vec<f32> = (0..240)
+            .map(|_| motion.tick(1.0 / 30.0, [0.0, 0.0], false).sway)
+            .collect();
+        assert!(
+            values
+                .iter()
+                .all(|v| v.is_finite() && (-1.0..=1.0).contains(v))
+        );
+        assert!(values.iter().any(|v| *v > 0.9));
+        assert!(values.iter().any(|v| *v < -0.9));
     }
 }

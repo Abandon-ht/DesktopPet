@@ -1,10 +1,13 @@
 [package]
-name = "pet-core"
+name = "pet-persistence"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
 
 [dependencies]
+pet-core = { path = "../pet-core" }
 pet-protocol = { path = "../pet-protocol" }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde_json.workspace = true
 serde.workspace = true

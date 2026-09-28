@@ -6,6 +6,8 @@ members = [
     "crates/pet-protocol",
     "crates/pet-ipc",
     "crates/avatar-pack",
+    "crates/persistence",
+    "crates/inference-http",
     "tools/p0-probe",
     "tools/p0-ipc-probe",
     "tools/p0-tauri-probe",

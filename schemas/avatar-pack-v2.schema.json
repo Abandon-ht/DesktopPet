@@ -1,0 +1,531 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://desktoppet.local/schemas/avatar-pack-v2.json",
+  "title": "DesktopPet local avatar pack v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "display_name",
+    "renderer",
+    "entry",
+    "interaction",
+    "actions",
+    "expression_profile",
+    "license"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "renderer": {
+      "const": "live2d_mocari"
+    },
+    "entry": {
+      "type": "string",
+      "minLength": 1
+    },
+    "interaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "head",
+        "body",
+        "anchor"
+      ],
+      "properties": {
+        "head": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "minItems": 3,
+          "maxItems": 32,
+          "description": "Strictly convex polygon; runtime validates convexity. Top-left normalized 5:6 viewport."
+        },
+        "body": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "minItems": 3,
+          "maxItems": 32,
+          "description": "Strictly convex polygon; runtime validates convexity. Top-left normalized 5:6 viewport."
+        },
+        "anchor": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "window_perch_y": {
+          "type": "number",
+          "minimum": 0.2,
+          "maximum": 0.8,
+          "default": 0.5,
+          "description": "Normalized vertical contact line for another app window top, independent of the floor foot anchor."
+        }
+      }
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "head_pat": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "expression",
+                "duration_ms"
+              ],
+              "properties": {
+                "expression": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "duration_ms": {
+                  "type": "integer",
+                  "minimum": 100,
+                  "maximum": 5000
+                }
+              }
+            }
+          ]
+        },
+        "body_tap": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "expression",
+                "duration_ms"
+              ],
+              "properties": {
+                "expression": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "duration_ms": {
+                  "type": "integer",
+                  "minimum": 100,
+                  "maximum": 5000
+                }
+              }
+            }
+          ]
+        },
+        "feed": {
+          "$ref": "#/$defs/optional_action"
+        },
+        "play": {
+          "$ref": "#/$defs/optional_action"
+        },
+        "rest": {
+          "$ref": "#/$defs/optional_action"
+        },
+        "greet": {
+          "$ref": "#/$defs/optional_action"
+        },
+        "peek": {
+          "$ref": "#/$defs/optional_action"
+        },
+        "invite": {
+          "$ref": "#/$defs/optional_action"
+        }
+      }
+    },
+    "parameter_map": {
+      "type": "object",
+      "maxProperties": 32,
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "redistributable"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "unverified",
+            "licensed",
+            "original"
+          ]
+        },
+        "redistributable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "expression_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "catalog",
+        "baseline",
+        "reactions"
+      ],
+      "properties": {
+        "catalog": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 32,
+          "patternProperties": {
+            "^[A-Za-z0-9_-]{1,64}$": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "label"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "baseline": {
+          "type": "object",
+          "required": [
+            "neutral"
+          ],
+          "properties": {
+            "neutral": {
+              "type": "string",
+              "minLength": 1
+            },
+            "cheerful": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sad": {
+              "type": "string",
+              "minLength": 1
+            },
+            "irritable": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tired": {
+              "type": "string",
+              "minLength": 1
+            },
+            "depleted": {
+              "type": "string",
+              "minLength": 1
+            },
+            "starving": {
+              "type": "string",
+              "minLength": 1
+            },
+            "affectionate": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "reactions": {
+          "type": "object",
+          "properties": {
+            "head_pat": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expression",
+                  "duration_ms"
+                ],
+                "properties": {
+                  "expression": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 10000
+                  }
+                }
+              }
+            },
+            "body_tap": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expression",
+                  "duration_ms"
+                ],
+                "properties": {
+                  "expression": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 10000
+                  }
+                }
+              }
+            },
+            "feed": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expression",
+                  "duration_ms"
+                ],
+                "properties": {
+                  "expression": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 10000
+                  }
+                }
+              }
+            },
+            "play": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expression",
+                  "duration_ms"
+                ],
+                "properties": {
+                  "expression": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 10000
+                  }
+                }
+              }
+            },
+            "rest": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expression",
+                  "duration_ms"
+                ],
+                "properties": {
+                  "expression": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 10000
+                  }
+                }
+              }
+            },
+            "greet": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expression",
+                  "duration_ms"
+                ],
+                "properties": {
+                  "expression": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 10000
+                  }
+                }
+              }
+            },
+            "peek": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expression",
+                  "duration_ms"
+                ],
+                "properties": {
+                  "expression": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 10000
+                  }
+                }
+              }
+            },
+            "invite": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expression",
+                  "duration_ms"
+                ],
+                "properties": {
+                  "expression": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 10000
+                  }
+                }
+              }
+            },
+            "celebrate": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expression",
+                  "duration_ms"
+                ],
+                "properties": {
+                  "expression": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 100,
+                    "maximum": 10000
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "$defs": {
+    "optional_action": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "expression",
+            "duration_ms"
+          ],
+          "properties": {
+            "expression": {
+              "type": "string",
+              "minLength": 1
+            },
+            "duration_ms": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 5000
+            }
+          }
+        }
+      ]
+    }
+  }
+}

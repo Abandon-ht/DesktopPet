@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
-  "id": "demo-template",
-  "display_name": "自定义角色模板",
+  "schema_version": 2,
+  "id": "demo-expression-template",
+  "display_name": "自定义角色表情模板",
   "renderer": "live2d_mocari",
   "entry": "model/model.model3.json",
   "interaction": {
@@ -61,5 +61,29 @@
   "license": {
     "status": "unverified",
     "redistributable": false
+  },
+  "expression_profile": {
+    "catalog": {
+      "neutral": {
+        "path": "model/neutral.exp3.json",
+        "label": "中性"
+      },
+      "happy": {
+        "path": "model/happy.exp3.json",
+        "label": "开心"
+      }
+    },
+    "baseline": {
+      "neutral": "neutral",
+      "cheerful": "happy"
+    },
+    "reactions": {
+      "head_pat": [
+        {
+          "expression": "happy",
+          "duration_ms": 1200
+        }
+      ]
+    }
   }
 }

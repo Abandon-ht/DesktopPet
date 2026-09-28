@@ -39,6 +39,11 @@ if os.environ.get('DESKTOPPET_DEV_SHOW_SETTINGS') == '1':
     show_settings.touch()
 else:
     show_settings.unlink(missing_ok=True)
+test_data_dir = contents / 'Resources/dev-data-dir.txt'
+if os.environ.get('DESKTOPPET_DEV_DATA_DIR'):
+    test_data_dir.write_text(str(Path(os.environ['DESKTOPPET_DEV_DATA_DIR']).resolve()) + '\n')
+else:
+    test_data_dir.unlink(missing_ok=True)
 with (contents / 'Info.plist').open('wb') as stream:
     plistlib.dump(dict(CFBundleIdentifier=bundle_id, CFBundleName=app.stem,
                       CFBundleDisplayName=app.stem,

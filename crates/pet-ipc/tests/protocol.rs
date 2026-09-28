@@ -5,7 +5,7 @@ use pet_ipc::{
 use serde_json::{Value, json};
 use std::io::Cursor;
 fn request(sequence: u64, kind: &str, payload: Value) -> Value {
-    json!({"protocol_version":1,"session_id":"test","sequence":sequence,
+    json!({"protocol_version":pet_protocol::PROTOCOL_VERSION,"session_id":"test","sequence":sequence,
         "request_id":format!("r{sequence}"),"type":kind,"payload":payload})
 }
 fn input(messages: &[Value]) -> Cursor<Vec<u8>> {

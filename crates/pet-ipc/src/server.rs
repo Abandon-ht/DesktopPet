@@ -1,8 +1,8 @@
-//! Bounded, ordered v1 protocol. The callback runs through the host event loop;
+//! Bounded, ordered protocol. The callback runs through the host event loop;
 //! accepted means applied on that loop. Replay deduplication covers 128 recent commands.
 use crate::{MAX_FRAME, frame};
 use anyhow::{Context, Result, ensure};
-use pet_protocol::DesktopCommand;
+use pet_protocol::{DesktopCommand, PROTOCOL_VERSION};
 use serde_json::{Value, json};
 use std::{
     collections::VecDeque,
@@ -43,7 +43,7 @@ pub fn serve_with(
     while let Some(bytes) = frame(reader)? {
         let request: Value = serde_json::from_slice(&bytes).context("invalid_json")?;
         ensure!(
-            request["protocol_version"].as_u64() == Some(1),
+            request["protocol_version"].as_u64() == Some(u64::from(PROTOCOL_VERSION)),
             "unsupported_protocol_version"
         );
         let id = request["session_id"]
@@ -122,7 +122,7 @@ pub fn serve_with(
         };
         serde_json::to_writer(
             &mut *writer,
-            &json!({"protocol_version":1,"session_id":id,
+            &json!({"protocol_version":PROTOCOL_VERSION,"session_id":id,
             "sequence":expected,"request_id":request_id,"type":reply_kind,"payload":payload}),
         )?;
         writer.write_all(b"\n")?;

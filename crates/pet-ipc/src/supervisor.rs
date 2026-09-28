@@ -107,7 +107,7 @@ impl Host {
         ensure!(!self.stopped, "host is stopped");
         self.sequence = self.sequence.checked_add(1).context("sequence exhausted")?;
         let request_id = format!("r-{}", self.sequence);
-        let request = json!({"protocol_version":1,"session_id":self.session,"sequence":self.sequence,"request_id":request_id,"type":kind,"payload":payload});
+        let request = json!({"protocol_version":pet_protocol::PROTOCOL_VERSION,"session_id":self.session,"sequence":self.sequence,"request_id":request_id,"type":kind,"payload":payload});
         let result = (|| -> Result<Value> {
             self.requests
                 .as_ref()
@@ -119,7 +119,8 @@ impl Host {
                 .recv_timeout(self.timeout)
                 .context("host response timeout or disconnected")??;
             ensure!(
-                reply["protocol_version"].as_u64() == Some(1),
+                reply["protocol_version"].as_u64()
+                    == Some(u64::from(pet_protocol::PROTOCOL_VERSION)),
                 "host protocol mismatch"
             );
             ensure!(
@@ -146,7 +147,7 @@ impl Host {
         result
     }
 
-    /// Only idempotent P1 desktop commands are exposed in this transport.
+    /// Desktop commands are idempotent; durable care operations stay in SQLite.
     pub fn desktop(&mut self, command: pet_protocol::DesktopCommand) -> Result<()> {
         let reply = self.exchange("desktop", "result", serde_json::to_value(command)?)?;
         ensure!(

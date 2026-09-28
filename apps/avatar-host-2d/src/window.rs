@@ -7,6 +7,7 @@ use mocari::{
 };
 use serde_json::json;
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -80,6 +81,9 @@ pub fn run(entry: &Path) -> Result<()> {
         pack,
         follow_proxy,
         state: None,
+        overlay: None,
+        overlay_close: None,
+        overlay_deadline: None,
         error: None,
     };
     event_loop.run_app(&mut app)?;
@@ -104,12 +108,131 @@ struct AvatarHost {
     pack: Option<avatar_pack::Pack>,
     follow_proxy: EventLoopProxy<Control>,
     state: Option<State>,
+    overlay: Option<State>,
+    overlay_close: Option<Arc<Window>>,
+    overlay_deadline: Option<Instant>,
     error: Option<anyhow::Error>,
 }
 impl AvatarHost {
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: anyhow::Error) {
         self.error = Some(error);
         event_loop.exit();
+    }
+    fn begin_screen_play(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
+        if self.overlay.is_some() {
+            return Ok(());
+        }
+        let main = self.state.as_ref().context("renderer not ready")?;
+        if !main.visible {
+            return Ok(());
+        }
+        let (_, screens, current) = crate::platform::desktop(&main.window)?;
+        let work = screens
+            .iter()
+            .find(|s| s.id == current)
+            .or(screens.first())
+            .context("no screen for presentation")?
+            .work;
+        let width = (work.width * 0.72).clamp(200.0, 800.0);
+        let height = (width * 1.2).min(work.height * 0.82).max(240.0);
+        let attributes = Window::default_attributes()
+            .with_title("DesktopPet · 短时互动")
+            .with_inner_size(LogicalSize::new(width, height))
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_active(false)
+            .with_visible(false)
+            .with_window_level(WindowLevel::AlwaysOnTop);
+        #[cfg(target_os = "macos")]
+        let attributes = attributes
+            .with_has_shadow(false)
+            .with_accepts_first_mouse(true);
+        let window = Arc::new(event_loop.create_window(attributes)?);
+        let mut overlay = pollster::block_on(State::new(
+            window,
+            &self.entry,
+            self.pack.clone(),
+            self.follow_proxy.clone(),
+            true,
+        ))?;
+        let target = crate::snap::Rect {
+            x: work.x + (work.width - width) / 2.0,
+            y: work.y + (work.height - height) / 2.0,
+            width,
+            height,
+        };
+        crate::platform::move_to(&overlay.window, target)?;
+        let close = Arc::new(
+            event_loop.create_window(
+                Window::default_attributes()
+                    .with_title("停止 DesktopPet 互动")
+                    .with_inner_size(LogicalSize::new(230.0, 72.0))
+                    .with_decorations(true)
+                    .with_active(false)
+                    .with_visible(false)
+                    .with_window_level(WindowLevel::AlwaysOnTop),
+            )?,
+        );
+        crate::platform::move_to(
+            &close,
+            crate::snap::Rect {
+                x: work.x + (work.width - 230.0).max(0.0) - 12.0,
+                y: work.y + 12.0,
+                width: 230.0,
+                height: 72.0,
+            },
+        )?;
+        overlay.set_visible(true)?;
+        let cue = [
+            pet_protocol::Feedback::Invite,
+            pet_protocol::Feedback::Greet,
+            pet_protocol::Feedback::HeadPat,
+            pet_protocol::Feedback::BodyTap,
+        ]
+        .into_iter()
+        .find(|cue| {
+            overlay
+                .feedbacks
+                .iter()
+                .any(|(available, _)| available == cue)
+        });
+        if let Some(cue) = cue {
+            overlay.avatar(pet_protocol::AvatarCommand::PlayFeedback(cue))?;
+        }
+        close.set_visible(true);
+        if let Err(error) = self.state.as_mut().unwrap().set_visible(false) {
+            close.set_visible(false);
+            let _ = overlay.set_visible(false);
+            let _ = self.state.as_mut().unwrap().set_visible(true);
+            return Err(error);
+        }
+        self.overlay_deadline = Some(Instant::now() + Duration::from_secs(8));
+        self.overlay = Some(overlay);
+        self.overlay_close = Some(close);
+        pet_ipc::event_log!(
+            "{}",
+            json!({"event":"screen_play_started","deadline_ms":8000})
+        );
+        Ok(())
+    }
+    fn end_screen_play(&mut self, restore_main: bool) -> Result<()> {
+        self.overlay_deadline = None;
+        if let Some(close) = self.overlay_close.take() {
+            close.set_visible(false);
+        }
+        if let Some(mut overlay) = self.overlay.take() {
+            let hide_result = overlay.set_visible(false);
+            drop(overlay);
+            if restore_main && let Some(main) = self.state.as_mut() {
+                main.set_visible(true)?;
+            }
+            pet_ipc::event_log!(
+                "{}",
+                json!({"event":"screen_play_ended","restore_main":restore_main})
+            );
+            hide_result?;
+        }
+        Ok(())
     }
 }
 impl ApplicationHandler<Control> for AvatarHost {
@@ -119,6 +242,32 @@ impl ApplicationHandler<Control> for AvatarHost {
         match event {
             Control::Command(command, reply) => {
                 let result = (|| -> Result<serde_json::Value> {
+                    if let Command::Desktop(DesktopCommand::StartScreenPlay) = &command {
+                        // A presentation failure leaves the compact pet usable.
+                        if let Err(error) = self.begin_screen_play(event_loop) {
+                            eprintln!("screen play unavailable: {error:#}");
+                            if let Some(main) = self.state.as_mut() {
+                                let _ = main.set_visible(true);
+                            }
+                        }
+                        return Ok(json!({}));
+                    }
+                    if let Command::Desktop(DesktopCommand::StopScreenPlay) = &command {
+                        self.end_screen_play(true)?;
+                        return Ok(json!({}));
+                    }
+                    if let Command::Desktop(DesktopCommand::SetVisible(true)) = &command
+                        && self.overlay.is_some()
+                    {
+                        self.end_screen_play(true)?;
+                        return Ok(json!({}));
+                    }
+                    if matches!(
+                        &command,
+                        Command::Shutdown | Command::Desktop(DesktopCommand::SetVisible(false))
+                    ) {
+                        self.end_screen_play(false)?;
+                    }
                     let state = self.state.as_mut().context("renderer not ready")?;
                     match command {
                         Command::Hello => {
@@ -193,6 +342,7 @@ impl ApplicationHandler<Control> for AvatarHost {
                 &self.entry,
                 self.pack.clone(),
                 self.follow_proxy.clone(),
+                false,
             ))
         })();
         match result {
@@ -201,6 +351,28 @@ impl ApplicationHandler<Control> for AvatarHost {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self
+            .overlay_deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+            && let Err(error) = self.end_screen_play(true)
+        {
+            self.fail(event_loop, error);
+            return;
+        }
+        if let Some(overlay) = self.overlay.as_mut() {
+            let now = Instant::now();
+            if now >= overlay.next_frame {
+                overlay.window.request_redraw();
+                overlay.next_frame = now + Duration::from_secs_f64(1. / 30.);
+            }
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                overlay.next_frame.min(
+                    self.overlay_deadline
+                        .unwrap_or(now + Duration::from_secs(8)),
+                ),
+            ));
+            return;
+        }
         let Some(state) = &mut self.state else {
             return;
         };
@@ -239,7 +411,57 @@ impl ApplicationHandler<Control> for AvatarHost {
             ),
         ));
     }
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if self
+            .overlay_close
+            .as_ref()
+            .is_some_and(|window| window.id() == id)
+        {
+            if let WindowEvent::CloseRequested = event
+                && let Err(error) = self.end_screen_play(true)
+            {
+                self.fail(event_loop, error);
+            }
+            return;
+        }
+        if self
+            .overlay
+            .as_ref()
+            .is_some_and(|state| state.window.id() == id)
+        {
+            let result = match event {
+                WindowEvent::CloseRequested => self.end_screen_play(true),
+                WindowEvent::Resized(size) if size.width > 0 && size.height > 0 => {
+                    let overlay = self.overlay.as_mut().unwrap();
+                    overlay.config.width = size.width;
+                    overlay.config.height = size.height;
+                    overlay.surface.configure(&overlay.device, &overlay.config);
+                    overlay.composite = crate::composite::Composite::new(
+                        &overlay.device,
+                        &overlay.config,
+                        overlay.backend,
+                    );
+                    overlay.transform.update_matrix(
+                        &overlay.queue,
+                        &fit_bounds(overlay.neutral_bounds, size.width, size.height),
+                    );
+                    Ok(())
+                }
+                WindowEvent::RedrawRequested => self.overlay.as_mut().unwrap().render(),
+                _ => Ok(()),
+            };
+            if let Err(error) = result {
+                self.fail(event_loop, error);
+            }
+            return;
+        }
+        if self
+            .state
+            .as_ref()
+            .is_none_or(|state| state.window.id() != id)
+        {
+            return;
+        }
         let Some(state) = &mut self.state else {
             return;
         };
@@ -308,13 +530,19 @@ struct State {
     pack: Option<avatar_pack::Pack>,
     feedbacks: Vec<(
         pet_protocol::Feedback,
-        mocari::expression::ExpressionPlayer,
-        u32,
+        Vec<(mocari::json::Expression3, u32)>,
     )>,
-    active: Option<(mocari::expression::ExpressionPlayer, u32)>,
+    touch_feedbacks: BTreeMap<pet_protocol::TouchCue, Vec<(mocari::json::Expression3, u32)>>,
+    catalog: BTreeMap<String, mocari::json::Expression3>,
+    baselines: BTreeMap<pet_protocol::BaselineExpression, String>,
+    baseline: pet_protocol::BaselineExpression,
+    expressions: mocari::expression::ExpressionManager,
+    cue: Option<Cue>,
+    preview_until: Option<Instant>,
     last_animation: Instant,
     pose_dirty: bool,
     events: Vec<pet_protocol::AvatarEvent>,
+    next_hit_id: u64,
     pressed: Option<(pet_protocol::HitRegion, [f64; 2], Instant)>,
     neutral_bounds: [f32; 4],
     snap_enabled: bool,
@@ -340,12 +568,19 @@ struct State {
     visible: bool,
 }
 
+struct Cue {
+    stages: Vec<(mocari::json::Expression3, u32)>,
+    stage: usize,
+    stage_started: Instant,
+}
+
 impl State {
     async fn new(
         window: Arc<Window>,
         entry: &Path,
         pack: Option<avatar_pack::Pack>,
         follow_proxy: EventLoopProxy<Control>,
+        overlay_mode: bool,
     ) -> Result<Self> {
         let started = Instant::now();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -387,21 +622,76 @@ impl State {
             load_model_runtime(entry)?
         };
         let mut feedbacks = Vec::new();
+        let mut touch_feedbacks = BTreeMap::new();
+        let mut catalog = BTreeMap::new();
+        let mut baselines = BTreeMap::new();
         if let Some(pack) = &pack {
+            if let Some(profile) = &pack.manifest.expression_profile {
+                baselines = profile.baseline.clone();
+                for (id, asset) in &profile.catalog {
+                    catalog.insert(
+                        id.clone(),
+                        mocari::expression::load_expression(avatar_pack::checked_path(
+                            &pack.root,
+                            &asset.path,
+                        )?)?,
+                    );
+                }
+            }
+            for (cue, stages) in &pack.manifest.touch_reactions {
+                touch_feedbacks.insert(
+                    *cue,
+                    stages
+                        .iter()
+                        .map(|stage| {
+                            Ok((
+                                catalog
+                                    .get(&stage.expression)
+                                    .context("missing touch expression")?
+                                    .clone(),
+                                stage.duration_ms,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                );
+            }
             for feedback in [
                 pet_protocol::Feedback::HeadPat,
                 pet_protocol::Feedback::BodyTap,
+                pet_protocol::Feedback::Feed,
+                pet_protocol::Feedback::Play,
+                pet_protocol::Feedback::Rest,
+                pet_protocol::Feedback::Greet,
+                pet_protocol::Feedback::Peek,
+                pet_protocol::Feedback::Invite,
+                pet_protocol::Feedback::Celebrate,
             ] {
-                if let Some(action) = pack.manifest.action(feedback) {
+                if let Some(stages) = pack.manifest.reaction(feedback) {
                     feedbacks.push((
                         feedback,
-                        mocari::expression::ExpressionPlayer::new(
+                        stages
+                            .iter()
+                            .map(|stage| {
+                                Ok((
+                                    catalog
+                                        .get(&stage.expression)
+                                        .context("missing catalog expression")?
+                                        .clone(),
+                                    stage.duration_ms,
+                                ))
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                    ));
+                } else if let Some(action) = pack.manifest.action(feedback) {
+                    feedbacks.push((
+                        feedback,
+                        vec![(
                             mocari::expression::load_expression(avatar_pack::checked_path(
                                 &pack.root,
                                 &action.expression,
                             )?)?,
-                        ),
-                        action.duration_ms,
+                            action.duration_ms,
+                        )],
                     ));
                 }
             }
@@ -468,7 +758,11 @@ impl State {
             "{}",
             json!({"event": "ready", "adapter": format!("{:?}", adapter.get_info()), "alpha_modes": format!("{:?}", caps.alpha_modes), "selected_alpha": format!("{:?}", config.alpha_mode), "format": format!("{:?}", config.format), "initialization_ms": started.elapsed().as_secs_f64() * 1000., "monitors": monitors, "passthrough": passthrough, "ax_trusted": crate::platform::ax_trusted(), "clipping_contexts": plan.contexts().len()})
         );
-        let layout_path = std::env::var_os("DESKTOPPET_LAYOUT").map(PathBuf::from);
+        let layout_path = if overlay_mode {
+            None
+        } else {
+            std::env::var_os("DESKTOPPET_LAYOUT").map(PathBuf::from)
+        };
         let placement = layout_path
             .as_ref()
             .and_then(|p| avatar_pack::read_json::<crate::placement::Saved>(p).ok())
@@ -492,14 +786,21 @@ impl State {
             placement,
             screens,
             next_desktop_check: Instant::now(),
-            restored: false,
+            restored: overlay_mode,
             pointer_near: false,
             pack,
             feedbacks,
-            active: None,
+            touch_feedbacks,
+            catalog,
+            baselines,
+            baseline: pet_protocol::BaselineExpression::Neutral,
+            expressions: mocari::expression::ExpressionManager::new(),
+            cue: None,
+            preview_until: None,
             last_animation: Instant::now(),
             pose_dirty: false,
             events: Vec::new(),
+            next_hit_id: 1,
             pressed: None,
             neutral_bounds: bounds,
             snap_enabled: cfg!(target_os = "macos"),
@@ -572,7 +873,16 @@ impl State {
                     && started.elapsed() < Duration::from_secs(1)
                     && self.events.len() < 32
                 {
-                    self.events.push(pet_protocol::AvatarEvent::Hit(region));
+                    self.events
+                        .push(pet_protocol::AvatarEvent::Hit(pet_protocol::HitDetail {
+                            region,
+                            point: [
+                                (x / size.width * 1000.0).round().clamp(0.0, 1000.0) as u16,
+                                (y / size.height * 1000.0).round().clamp(0.0, 1000.0) as u16,
+                            ],
+                            event_id: self.next_hit_id,
+                        }));
+                    self.next_hit_id = self.next_hit_id.saturating_add(1);
                 }
             }
             if previous != receiving {
@@ -624,6 +934,27 @@ impl State {
         Ok(())
     }
 
+    fn play_expression(&mut self, expression: mocari::json::Expression3) {
+        if self.expressions.active_expression_count() >= 4 {
+            self.expressions = mocari::expression::ExpressionManager::new();
+        }
+        self.expressions.play(expression);
+        self.pose_dirty = true;
+    }
+
+    fn restore_baseline(&mut self) {
+        if let Some(id) = self.baselines.get(&self.baseline).or_else(|| {
+            self.baselines
+                .get(&pet_protocol::BaselineExpression::Neutral)
+        }) && let Some(expression) = self.catalog.get(id)
+        {
+            self.play_expression(expression.clone());
+        } else {
+            self.expressions = mocari::expression::ExpressionManager::new();
+        }
+        self.pose_dirty = true;
+    }
+
     fn render(&mut self) -> Result<()> {
         let now = Instant::now();
         let delta = now
@@ -631,6 +962,28 @@ impl State {
             .as_secs_f32()
             .min(0.1);
         self.last_animation = now;
+        if self.preview_until.is_some_and(|deadline| now >= deadline) {
+            self.preview_until = None;
+            self.restore_baseline();
+        }
+        if let Some(mut cue) = self.cue.take() {
+            while now.duration_since(cue.stage_started)
+                >= Duration::from_millis(u64::from(cue.stages[cue.stage].1))
+            {
+                cue.stage_started += Duration::from_millis(u64::from(cue.stages[cue.stage].1));
+                cue.stage += 1;
+                if let Some((expression, _)) = cue.stages.get(cue.stage) {
+                    self.play_expression(expression.clone());
+                } else {
+                    self.restore_baseline();
+                    break;
+                }
+            }
+            if cue.stage < cue.stages.len() {
+                self.cue = Some(cue);
+            }
+        }
+        self.expressions.tick(delta);
         let procedural = self.pack.as_ref().is_some_and(|p| {
             [
                 "blink_left",
@@ -639,6 +992,7 @@ impl State {
                 "gaze_y",
                 "head_x",
                 "head_y",
+                "body_sway",
             ]
             .iter()
             .any(|key| p.manifest.parameter_map.contains_key(*key))
@@ -646,7 +1000,7 @@ impl State {
         let pose = self
             .animation
             .tick(delta, self.gaze_target, self.input.dragging);
-        if self.active.is_some() || self.pose_dirty || procedural {
+        if !self.expressions.is_empty() || self.pose_dirty || procedural {
             let runtime = self.model.runtime_mut();
             runtime.reset_parameters();
             if let Some(pack) = &self.pack {
@@ -655,6 +1009,7 @@ impl State {
                     ("gaze_y", pose.gaze[1], 0.8),
                     ("head_x", pose.gaze[0], 0.25),
                     ("head_y", pose.gaze[1], 0.25),
+                    ("body_sway", pose.sway, 0.08),
                 ] {
                     if let Some(id) = pack.manifest.parameter_map.get(key)
                         && let Some(info) = runtime.parameter_info(id)
@@ -672,34 +1027,18 @@ impl State {
                     }
                 }
             }
-            if let Some((player, duration)) = &mut self.active {
-                player.tick(delta);
-                if player.time() * 1000.0 >= *duration as f32 && !player.is_fading_out() {
-                    player.start_fade_out();
-                }
-                if player.is_finished() {
-                    self.active = None;
-                } else {
-                    player.apply(runtime);
-                }
-            }
             if let Some(pack) = &self.pack {
                 for key in ["blink_left", "blink_right"] {
-                    if let Some(id) = pack.manifest.parameter_map.get(key) {
-                        let owned = self.active.as_ref().is_some_and(|(p, _)| {
-                            p.expression()
-                                .parameters()
-                                .iter()
-                                .any(|parameter| parameter.id() == id)
-                        });
-                        if !owned && let Some(info) = runtime.parameter_info(id) {
-                            let value =
-                                info.minimum() + (info.default() - info.minimum()) * pose.eye_open;
-                            runtime.set_parameter(id, value);
-                        }
+                    if let Some(id) = pack.manifest.parameter_map.get(key)
+                        && let Some(info) = runtime.parameter_info(id)
+                    {
+                        let value =
+                            info.minimum() + (info.default() - info.minimum()) * pose.eye_open;
+                        runtime.set_parameter(id, value);
                     }
                 }
             }
+            self.expressions.apply(runtime);
             runtime.update_meshes().context("mesh update failed")?;
             self.buffers
                 .update_drawables(&self.queue, runtime.meshes())?;
@@ -780,9 +1119,10 @@ impl State {
     }
     fn begin_press(&mut self) {
         self.detach_external();
-        self.active = None;
+        self.cue = None;
+        self.preview_until = None;
+        self.restore_baseline();
         self.pose_dirty = true;
-        self.events.clear();
         if let (Some(pack), Some((x, y, _)), Ok(origin)) = (
             &self.pack,
             crate::platform::pointer(&self.window),
@@ -802,26 +1142,71 @@ impl State {
     fn avatar(&mut self, command: pet_protocol::AvatarCommand) -> Result<()> {
         match command {
             pet_protocol::AvatarCommand::CancelFeedback => {
-                self.active = None;
-                self.pose_dirty = true;
+                self.cue = None;
+                self.preview_until = None;
+                self.restore_baseline();
             }
             pet_protocol::AvatarCommand::PlayFeedback(feedback) => {
                 if !self.visible || self.input.dragging {
                     return Ok(());
                 }
-                let (_, player, duration) = self
+                let (_, stages) = self
                     .feedbacks
                     .iter()
-                    .find(|(f, _, _)| *f == feedback)
+                    .find(|(f, _)| *f == feedback)
                     .context("feedback unavailable")?;
-                let mut player = player.clone();
-                player.restart();
-                self.active = Some((player, *duration));
+                let stages = stages.clone();
+                self.preview_until = None;
+                self.play_expression(stages[0].0.clone());
+                self.cue = Some(Cue {
+                    stages,
+                    stage: 0,
+                    stage_started: Instant::now(),
+                });
                 self.last_animation = Instant::now();
                 pet_ipc::event_log!(
                     "{}",
                     json!({"event":"feedback_started","feedback":feedback})
                 );
+            }
+            pet_protocol::AvatarCommand::PlayTouchCue(cue) => {
+                if !self.visible || self.input.dragging {
+                    return Ok(());
+                }
+                let Some(stages) = self.touch_feedbacks.get(&cue).cloned() else {
+                    return Ok(());
+                };
+                self.preview_until = None;
+                self.play_expression(stages[0].0.clone());
+                self.cue = Some(Cue {
+                    stages,
+                    stage: 0,
+                    stage_started: Instant::now(),
+                });
+                self.last_animation = Instant::now();
+                pet_ipc::event_log!("{}", json!({"event":"touch_cue_started","cue":cue}));
+            }
+            pet_protocol::AvatarCommand::SetBaseline(baseline) => {
+                if self.baseline != baseline {
+                    self.baseline = baseline;
+                    if self.cue.is_none() && self.preview_until.is_none() && self.visible {
+                        self.restore_baseline();
+                    }
+                } else if self.expressions.is_empty() && self.visible {
+                    self.restore_baseline();
+                }
+            }
+            pet_protocol::AvatarCommand::PreviewExpression(id) => {
+                let expression = self.catalog.get(&id).context("expression not in catalog")?;
+                self.cue = None;
+                self.play_expression(expression.clone());
+                self.preview_until = Some(Instant::now() + Duration::from_secs(5));
+                self.pose_dirty = true;
+            }
+            pet_protocol::AvatarCommand::EndPreview => {
+                self.preview_until = None;
+                self.cue = None;
+                self.restore_baseline();
             }
         }
         Ok(())
@@ -1029,7 +1414,13 @@ impl State {
         self.ax_probe.set_enabled(visible && self.external_enabled);
         self.pressed = None;
         self.events.clear();
-        self.active = None;
+        self.cue = None;
+        self.preview_until = None;
+        if visible {
+            self.restore_baseline();
+        } else {
+            self.expressions = mocari::expression::ExpressionManager::new();
+        }
         self.pose_dirty = true;
         self.window.set_cursor_hittest(false)?;
         self.input = crate::input::Input::default();

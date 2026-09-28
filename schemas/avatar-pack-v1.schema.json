@@ -149,7 +149,13 @@
               }
             }
           ]
-        }
+        },
+        "feed": { "$ref": "#/$defs/optional_action" },
+        "play": { "$ref": "#/$defs/optional_action" },
+        "rest": { "$ref": "#/$defs/optional_action" },
+        "greet": { "$ref": "#/$defs/optional_action" },
+        "peek": { "$ref": "#/$defs/optional_action" },
+        "invite": { "$ref": "#/$defs/optional_action" }
       }
     },
     "parameter_map": {
@@ -178,6 +184,22 @@
           "type": "boolean"
         }
       }
+    }
+  },
+  "$defs": {
+    "optional_action": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["expression", "duration_ms"],
+          "properties": {
+            "expression": { "type": "string", "minLength": 1 },
+            "duration_ms": { "type": "integer", "minimum": 100, "maximum": 5000 }
+          }
+        }
+      ]
     }
   }
 }
