@@ -1,6 +1,6 @@
 # macOS 构建说明
 
-`Build macOS app (manual)` GitHub Actions **只支持手动触发**。它在 `macos-15` Apple Silicon 环境编译程序，从指定 Release 下载分包资源，做临时签名，并把 `DesktopPet.zip` 上传为保留 14 天的 Actions 构建产物。它没有经过 Apple 公证；首次打开时可能需要在“隐私与安全性”中明确允许。LLM 仍依赖用户自己启动的 LM Studio 服务，发行包不含 LLM 权重。
+`Build macOS app (manual)` GitHub Actions **只支持手动触发**。它在 `macos-15` Apple Silicon 环境编译程序，从指定 Release 下载分包资源，做临时签名，成功后**自动创建应用预发布 Release**，附上 `DesktopPet.zip` 和 `SHA256SUMS.txt`。同一个 ZIP 也会作为 Actions 构建产物保留 14 天。应用尚未经过 Apple 公证，在干净的 Mac 上直接双击启动也尚未验证。LLM 仍依赖用户自己启动的 LM Studio 服务，发行包不含 LLM 权重。
 
 ## 资源包
 
@@ -31,9 +31,9 @@ python3 tools/release/resources.py \
 
 1. 打开 **Actions → Build macOS app (manual) → Run workflow**。
 2. 选择分支和资源 Release 标签，然后运行。
-3. 成功后下载 `DesktopPet-macOS-arm64` 构建产物，解开外层压缩包，再解开 `DesktopPet.zip`，得到 `DesktopPet.app`。
+3. 两个任务都成功后，在 **Releases** 打开新建的 `v0.1.0-alpha.<运行序号>` 预发布，下载 `DesktopPet.zip`，解压得到 `DesktopPet.app`。同一页面附有 SHA-256 校验文件；Actions 运行页也保留一份临时构建产物。
 
-工作流不会因 push 或 PR 自动运行。工作流文件必须在默认分支，且它要有权限读取指定 Release。
+工作流不会因 push 或 PR 自动运行。构建任务只读取资源 Release；只有发布任务持有创建应用预发布所需的 `contents: write` 权限。
 
 本机需要 Rust 1.95 与 Xcode 命令行工具：
 

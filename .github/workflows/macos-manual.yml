@@ -9,13 +9,12 @@ on:
         default: resources-2026-09-29
         type: string
 
-permissions:
-  contents: read
-
 jobs:
   macos:
     runs-on: macos-15
     timeout-minutes: 120
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain
@@ -46,3 +45,48 @@ jobs:
           path: artifacts/local/release/DesktopPet.zip
           if-no-files-found: error
           retention-days: 14
+
+  publish:
+    needs: macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the successful macOS build
+        uses: actions/download-artifact@v4
+        with:
+          name: DesktopPet-macOS-arm64
+          path: dist
+      - name: Create or update the app pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESOURCE_TAG: ${{ inputs.resource_tag }}
+        run: |
+          set -euo pipefail
+          test -s dist/DesktopPet.zip
+          tag="v0.1.0-alpha.${GITHUB_RUN_NUMBER}"
+          digest="$(sha256sum dist/DesktopPet.zip | cut -d ' ' -f1)"
+          printf '%s  %s\n' "$digest" DesktopPet.zip > dist/SHA256SUMS.txt
+          cat > dist/RELEASE_NOTES.md <<EOF
+          macOS arm64 alpha package built by [Actions run #${GITHUB_RUN_NUMBER}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) from commit \`${GITHUB_SHA}\`.
+
+          Download \`DesktopPet.zip\`, extract \`DesktopPet.app\`, and move it to Applications. The app has an ad-hoc signature and is not Apple notarized. Direct double-click launch on a clean Mac has not yet been validated. LLM replies require your own LM Studio server and model.
+
+          SHA-256: \`${digest}\`. A matching \`SHA256SUMS.txt\` is attached.
+
+          Resources: [${RESOURCE_TAG}](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RESOURCE_TAG}). Sources, known licenses, and unresolved rights: [ASSETS.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/ASSETS.md). Copyright contact/removal: [POLICY.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/POLICY.md).
+
+          Contributors and users must not use this project to create or distribute sexualized content involving minors or minor-presenting characters.
+          禁止使用本项目制作或传播涉及未成年人或明显幼态角色的色情、性化内容。
+          EOF
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/DesktopPet.zip dist/SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" dist/DesktopPet.zip dist/SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "DesktopPet 0.1.0 alpha ${GITHUB_RUN_NUMBER} - macOS arm64" \
+              --notes-file dist/RELEASE_NOTES.md \
+              --prerelease
+          fi

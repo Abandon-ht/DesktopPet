@@ -1,6 +1,6 @@
 # Building DesktopPet for macOS
 
-The `Build macOS app (manual)` GitHub Actions workflow is triggered **only** through `workflow_dispatch`. It builds an Apple Silicon (`arm64`) app on `macos-15`, adds resource archives from a selected GitHub Release, applies an ad-hoc signature, and uploads `DesktopPet.zip` as a workflow artifact. The artifact expires after 14 days. It is not notarized; macOS may require the user to explicitly open it in Privacy & Security. The app uses a local LM Studio server for LLM replies; model weights for the LLM are not included.
+The `Build macOS app (manual)` GitHub Actions workflow is triggered **only** through `workflow_dispatch`. It builds an Apple Silicon (`arm64`) app on `macos-15`, adds resource archives from a selected GitHub Release, applies an ad-hoc signature, and automatically creates an app pre-release with `DesktopPet.zip` and `SHA256SUMS.txt`. The same ZIP is retained as a workflow artifact for 14 days. The app is not notarized, and direct double-click launch on a clean Mac has not yet been validated. The app uses a local LM Studio server for LLM replies; model weights for the LLM are not included.
 
 ## Resource archives
 
@@ -31,9 +31,9 @@ The output is `artifacts/local/release-assets/`, which is ignored by Git. Do not
 
 1. Open **Actions → Build macOS app (manual) → Run workflow**.
 2. Choose the branch and the resource Release tag. Run it.
-3. Download `DesktopPet-macOS-arm64` from the completed run and unzip the artifact, then unzip `DesktopPet.zip` to obtain `DesktopPet.app`.
+3. After both jobs succeed, open the new `v0.1.0-alpha.<run number>` pre-release under **Releases**. Download `DesktopPet.zip` and extract `DesktopPet.app`. The release also contains its SHA-256 checksum. The Actions run keeps a temporary copy of the same ZIP.
 
-The workflow does not run on pushes or pull requests. It needs the workflow file on the default branch and read access to the selected Release. For local builds, install Rust 1.95 and Xcode command line tools, then run:
+The workflow does not run on pushes or pull requests. The build job reads the resource Release; only the publish job has `contents: write` permission to create the app pre-release. For local builds, install Rust 1.95 and Xcode command line tools, then run:
 
 ```sh
 cargo +1.95.0 build --locked --release -p desktop-pet -p avatar-host-2d
