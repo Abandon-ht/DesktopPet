@@ -37,6 +37,9 @@ P1 开发入口：`apps/desktop` 为托盘及状态面板，`apps/avatar-host-2d
 
 P2-01 至 P2-06 已接入喂食、玩耍、休息、SQLite 存档、活动仲裁、受频率控制的主动陪伴、短时占屏、数值驱动表情及细分点击诊断。P2-07 的 12 个细分点击区和上／下半身剩余区惩罚已由用户初步目视确认。开发版将前两次限制区反馈绑定为 `Angry`、第三次绑定为 `Sad2` 黑脸；摸头固定 `Shy`，摸脸在 `shy_normal`／`Wink` 间选择，摸手在 `Shy`／`Happy1` 间选择。亲密度变化、收益冷却和退避规则仍按原设计执行。设置面板已移除三个验收用检查区，实际点击与养成数值刷新仍可用。旧角色包沿用旧反馈，更新后的本地角色包需重新导入。[实现与测试说明](docs/15-p2-implementation.md)、[表情编排](docs/16-p2-expression-design.md)、[点击反应](docs/18-p2-touch-reactions-plan.md)。
 
+P3 本地语音开发版已把角色头部点击和可选中英文关键词唤醒接入半双工会话，使用 Silero VAD、sherpa-onnx 或 sherpa-ncnn SenseVoice、LM Studio、ZipVoice 和系统扬声器；模型和参考 WAV 留在本地。文本注入的扬声器链路已试跑，真实麦克风、关键词质量与桌面点击仍待验收。设置见[语音配置与互动语音](docs/20-p3-voice-settings-and-greetings.md)。
+语音设置面板已加入后端选择、高级模型与 VAD 参数、头部唤醒语音、首次见面与定时问候；可用范围与后续步骤见[语音配置与互动语音](docs/20-p3-voice-settings-and-greetings.md)。
+
 若曾保存原始 `.model3.json` 路径，新版会在启动时优先迁移到开发包内有效的 `manifest.json` 并保留大小设置；已选择角色包的用户保持原选择。旧程序运行期间仍可从“角色与设置…”手动导入新包。
 
 ## 视频封面

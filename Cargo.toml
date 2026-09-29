@@ -8,6 +8,7 @@ members = [
     "crates/avatar-pack",
     "crates/persistence",
     "crates/inference-http",
+    "crates/voice-session",
     "tools/p0-probe",
     "tools/p0-ipc-probe",
     "tools/p0-tauri-probe",

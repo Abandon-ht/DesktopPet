@@ -1,5 +1,7 @@
 mod library;
+mod voice;
 use anyhow::{Context, Result};
+use chrono::{Local, Timelike};
 use pet_core::{
     Activity, Effect, Event, Intent, PetCore,
     care::{CareAction, Needs},
@@ -11,6 +13,7 @@ use pet_protocol::{
     AvatarCommand, AvatarEvent, BaselineExpression, DesktopCommand, DesktopEvent, HitDetail,
     HitRegion,
 };
+use pet_voice_session::{VoiceSettings, VoiceStatus};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -97,6 +100,7 @@ struct Shared {
     baseline: Mutex<BaselineExpression>,
     last_hit: Mutex<Option<HitDetail>>,
     last_touch: Mutex<Option<TouchView>>,
+    voice: Mutex<Option<voice::VoiceController>>,
     scale: AtomicU16,
     gaze_radius: AtomicU16,
     perch: AtomicU16,
@@ -286,6 +290,9 @@ impl Shared {
             }
             "quit" => {
                 self.stop.store(true, Ordering::Release);
+                if let Some(voice) = self.voice.lock().unwrap().as_ref() {
+                    voice.shutdown();
+                }
             }
             "stop_activity" => {
                 self.activity_stop_revision.fetch_add(1, Ordering::AcqRel);
@@ -301,6 +308,136 @@ fn status(state: tauri::State<'_, Arc<Shared>>) -> Status {
     let mut status = state.status.lock().unwrap().clone();
     status.visible = state.visible.load(Ordering::Acquire);
     status
+}
+#[tauri::command]
+fn voice_settings(state: tauri::State<'_, Arc<Shared>>) -> Result<VoiceSettings, String> {
+    state
+        .voice
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|voice| voice.settings())
+        .ok_or("语音尚未就绪".into())
+}
+#[tauri::command]
+fn set_voice_settings(
+    settings: VoiceSettings,
+    state: tauri::State<'_, Arc<Shared>>,
+) -> Result<(), String> {
+    settings.validate().map_err(|error| error.to_string())?;
+    let serialized = serde_json::to_string(&settings).map_err(|error| error.to_string())?;
+    let mut care = state
+        .care
+        .lock()
+        .map_err(|_| "设置存档不可用".to_string())?;
+    care.as_mut()
+        .ok_or("设置存档尚未就绪".to_string())?
+        .set_setting("voice", &serialized)
+        .map_err(|error| error.to_string())?;
+    drop(care);
+    state
+        .voice
+        .lock()
+        .unwrap()
+        .as_ref()
+        .ok_or("语音尚未就绪".to_string())?
+        .configure(settings);
+    Ok(())
+}
+#[tauri::command]
+fn voice_status(state: tauri::State<'_, Arc<Shared>>) -> VoiceStatus {
+    state
+        .voice
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|voice| voice.status())
+        .unwrap_or_default()
+}
+#[tauri::command]
+fn voice_start(state: tauri::State<'_, Arc<Shared>>) {
+    if let Some(voice) = state.voice.lock().unwrap().as_ref() {
+        voice.click();
+    }
+}
+#[tauri::command]
+fn voice_stop(state: tauri::State<'_, Arc<Shared>>) {
+    if let Some(voice) = state.voice.lock().unwrap().as_ref() {
+        voice.stop();
+    }
+}
+
+fn maybe_voice_greetings(shared: &Shared) {
+    if !shared.visible.load(Ordering::Acquire) {
+        return;
+    }
+    let voice_guard = shared.voice.lock().unwrap();
+    let Some(voice) = voice_guard.as_ref() else {
+        return;
+    };
+    let settings = voice.settings();
+    if !settings.enabled {
+        return;
+    }
+    let mut care_guard = shared.care.lock().unwrap();
+    let Some(care) = care_guard.as_mut() else {
+        return;
+    };
+    if settings.first_greeting_enabled
+        && care
+            .setting("voice_first_greeting_done")
+            .ok()
+            .flatten()
+            .as_deref()
+            != Some("1")
+    {
+        if voice.greet_if_idle("初次见面") {
+            let _ = care.set_setting("voice_first_greeting_done", "1");
+        }
+        return;
+    }
+    if !settings.timed_greetings_enabled {
+        return;
+    }
+    let now = Local::now();
+    let name = match now.hour() {
+        8 => "早上好",
+        12 => "午休时间到",
+        19 => "太阳落山",
+        22 => "快去睡吧",
+        _ => return,
+    };
+    let slot = now.format("%Y-%m-%d-%H").to_string();
+    if care
+        .setting("voice_last_timed_greeting")
+        .ok()
+        .flatten()
+        .as_deref()
+        != Some(&slot)
+        && voice.greet_if_idle(name)
+    {
+        let _ = care.set_setting("voice_last_timed_greeting", &slot);
+    }
+}
+
+fn maybe_voice_rest(shared: &Shared) {
+    let guard = shared.voice.lock().unwrap();
+    let Some(voice) = guard.as_ref() else { return };
+    if !voice.claim_rest_due() {
+        return;
+    }
+    let mut care_guard = shared.care.lock().unwrap();
+    let Some(care) = care_guard.as_mut() else {
+        return;
+    };
+    let request_id = format!("voice-idle-rest-{}", shared.care_clock.now_ms());
+    if let Ok(outcome) = care.apply(&request_id, CareAction::Rest, shared.care_clock.now_ms()) {
+        let _ = shared.care_events.try_send(CareSignal {
+            action: CareAction::Rest,
+            needs: outcome.state.needs,
+        });
+        let _ = shared.wake.try_send(());
+    }
 }
 #[derive(Serialize)]
 struct ExpressionItem {
@@ -585,6 +722,7 @@ fn monitor(
             let mut revision = shared.revision.load(Ordering::Acquire);
             let mut applied_visible = core.state().visible;
             let mut next_ping = Instant::now() + Duration::from_secs(1);
+            let mut next_voice_greeting_check = Instant::now();
             loop {
                 if shared.stop.load(Ordering::Acquire) {
                     // Direct lifecycle route, independent of core effects.
@@ -775,6 +913,11 @@ fn monitor(
                         }),
                     )?;
                 }
+                if Instant::now() >= next_voice_greeting_check {
+                    maybe_voice_greetings(shared);
+                    maybe_voice_rest(shared);
+                    next_voice_greeting_check = Instant::now() + Duration::from_secs(15);
+                }
                 *shared.activity.lock().unwrap() = core.state().activity;
                 *shared.baseline.lock().unwrap() = core.state().baseline;
                 // A wake-up rechecks emergency atomics immediately; timeout is
@@ -783,6 +926,11 @@ fn monitor(
                     for event in host.poll()? {
                         if let AvatarEvent::Hit(hit) = event {
                             *shared.last_hit.lock().unwrap() = Some(hit);
+                            if hit.region == HitRegion::Head
+                                && let Some(voice) = shared.voice.lock().unwrap().as_ref()
+                            {
+                                voice.head_click();
+                            }
                             if let Some(binding) = &touch_binding {
                                 if let Some(care) = shared.care.lock().unwrap().as_mut() {
                                     match care.apply_touch(
@@ -937,6 +1085,7 @@ fn run() -> Result<()> {
         baseline: Mutex::new(BaselineExpression::Neutral),
         last_hit: Mutex::new(None),
         last_touch: Mutex::new(None),
+        voice: Mutex::new(None),
         scale: AtomicU16::new(100),
         gaze_radius: AtomicU16::new(400),
         perch: AtomicU16::new(50),
@@ -979,6 +1128,11 @@ fn run() -> Result<()> {
             set_companion_settings,
             stop_activity,
             companion_activity,
+            voice_settings,
+            set_voice_settings,
+            voice_status,
+            voice_start,
+            voice_stop,
             library::preferences,
             expression_catalog,
             expression_baseline,
@@ -1014,6 +1168,42 @@ fn run() -> Result<()> {
             {
                 *setup_shared.companion.lock().unwrap() = settings;
             }
+            let mut voice_settings = VoiceSettings::default();
+            if let Ok(current) = std::env::current_dir() {
+                let candidate = current.join("models/local");
+                if candidate.join("silero_vad.onnx").is_file() {
+                    voice_settings.model_dir = candidate;
+                }
+            }
+            let dev_voice_config = resource_dir.join("voice-settings.json");
+            if dev_voice_config.is_file()
+                && let Ok(contents) = std::fs::read_to_string(dev_voice_config)
+                && let Ok(settings) = serde_json::from_str::<VoiceSettings>(&contents)
+                && settings.validate().is_ok()
+            {
+                voice_settings = settings;
+            }
+            if let Some(saved) = care.setting("voice")?
+                && let Ok(settings) = serde_json::from_str::<VoiceSettings>(&saved)
+                && settings.validate().is_ok()
+            {
+                voice_settings = settings;
+            }
+            if voice_settings.greeting_dir.as_os_str().is_empty()
+                && let Ok(current) = std::env::current_dir()
+                && current.join("artifacts/wav/心事.wav").is_file()
+            {
+                voice_settings.greeting_dir = current.join("artifacts/wav");
+            }
+            if voice_settings.reference_audio.as_os_str().is_empty()
+                && !voice_settings.greeting_dir.as_os_str().is_empty()
+            {
+                voice_settings.reference_audio = voice_settings.greeting_dir.join("午休时间到.wav");
+                voice_settings.reference_text =
+                    std::fs::read_to_string(voice_settings.greeting_dir.join("午休时间到.txt"))
+                        .unwrap_or_default();
+            }
+            *setup_shared.voice.lock().unwrap() = Some(voice::VoiceController::new(voice_settings));
             *setup_shared.care.lock().unwrap() = Some(care);
             *setup_shared.library.lock().unwrap() = Some(directory.clone());
             library::restore(&setup_shared, &directory, model.as_deref());
@@ -1124,6 +1314,7 @@ mod tests {
                 baseline: Mutex::new(BaselineExpression::Neutral),
                 last_hit: Mutex::new(None),
                 last_touch: Mutex::new(None),
+                voice: Mutex::new(None),
                 scale: AtomicU16::new(100),
                 gaze_radius: AtomicU16::new(400),
                 perch: AtomicU16::new(50),
@@ -1316,6 +1507,14 @@ mod tests {
     fn switching_to_touch_pack_enables_real_hit_feedback() {
         let fixture = Fixture::new("normal");
         let (shared, rx) = controls();
+        let voice_settings = VoiceSettings {
+            enabled: true,
+            model_dir: fixture.0.join("missing-models"),
+            reference_audio: fixture.0.join("missing-reference.wav"),
+            reference_text: "test fixture".into(),
+            ..Default::default()
+        };
+        *shared.voice.lock().unwrap() = Some(voice::VoiceController::new(voice_settings));
         *shared.library.lock().unwrap() = Some(fixture.0.clone());
         *shared.care.lock().unwrap() = Some(
             CareStore::open(fixture.0.join("care.sqlite3"), shared.care_clock.now_ms()).unwrap(),
@@ -1341,6 +1540,17 @@ mod tests {
             if let Some(view) = shared.last_touch.lock().unwrap().as_ref() {
                 assert_eq!(view.outcome.decision.rule_id, "arm");
                 assert_eq!(view.expressions, ["neutral"]);
+                assert!(
+                    shared
+                        .voice
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .status()
+                        .turn_id
+                        == 0
+                );
                 break;
             }
             assert!(

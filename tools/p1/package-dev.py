@@ -44,11 +44,17 @@ if os.environ.get('DESKTOPPET_DEV_DATA_DIR'):
     test_data_dir.write_text(str(Path(os.environ['DESKTOPPET_DEV_DATA_DIR']).resolve()) + '\n')
 else:
     test_data_dir.unlink(missing_ok=True)
+voice_config = contents / 'Resources/voice-settings.json'
+if os.environ.get('DESKTOPPET_DEV_VOICE_CONFIG'):
+    shutil.copy2(Path(os.environ['DESKTOPPET_DEV_VOICE_CONFIG']).resolve(strict=True), voice_config)
+else:
+    voice_config.unlink(missing_ok=True)
 with (contents / 'Info.plist').open('wb') as stream:
     plistlib.dump(dict(CFBundleIdentifier=bundle_id, CFBundleName=app.stem,
                       CFBundleDisplayName=app.stem,
                       CFBundleExecutable='desktop-pet', CFBundlePackageType='APPL',
-                      CFBundleVersion='1', NSHighResolutionCapable=True, LSUIElement=True), stream)
+                      CFBundleVersion='1', NSHighResolutionCapable=True, LSUIElement=True,
+                      NSMicrophoneUsageDescription='点击角色或启用关键词唤醒时，需要使用麦克风识别你的话语。'), stream)
 subprocess.run(['codesign', '--force', '--sign', '-', str(helper.parent)], check=True)
 subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True)
 print(app)

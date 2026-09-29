@@ -1,0 +1,20 @@
+[package]
+name = "pet-voice-session"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+cpal = "0.16"
+crossbeam-queue = "0.3"
+pet-inference-http = { path = "../inference-http" }
+serde.workspace = true
+serde_json.workspace = true
+sherpa-onnx = { version = "=1.13.8", default-features = false, features = ["static"] }
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+
+[dev-dependencies]
+serde_json.workspace = true

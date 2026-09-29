@@ -11,6 +11,7 @@ pub struct LmStudioConfig {
     /// Accepts either the server root or its `/v1` compatibility base URL.
     pub base_url: String,
     pub model_id: String,
+    pub api_key: Option<String>,
     pub max_output_tokens: u32,
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
@@ -21,6 +22,7 @@ impl LmStudioConfig {
         Self {
             base_url: base_url.into(),
             model_id: model_id.into(),
+            api_key: None,
             max_output_tokens: 512,
             connect_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(180),
@@ -72,6 +74,13 @@ struct NativeChatRequest<'a> {
     max_output_tokens: u32,
     stream: bool,
     store: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_response_id: Option<&'a str>,
+}
+
+pub struct NativeReply {
+    pub text: String,
+    pub response_id: Option<String>,
 }
 
 impl LmStudioBackend {
@@ -91,7 +100,17 @@ impl LmStudioBackend {
             bail!("LM Studio URL must be an HTTP(S) server root or /v1 base URL");
         }
         base_url.set_path("/v1/");
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some(key) = config.api_key.as_deref().filter(|key| !key.is_empty()) {
+            let bearer = format!("Bearer {key}");
+            headers.insert(
+                reqwest::header::AUTHORIZATION,
+                reqwest::header::HeaderValue::from_str(&bearer)
+                    .context("invalid API key header")?,
+            );
+        }
         let client = Client::builder()
+            .default_headers(headers)
             .connect_timeout(config.connect_timeout)
             .timeout(config.request_timeout)
             .build()?;
@@ -212,13 +231,28 @@ impl LmStudioBackend {
 
     /// LM Studio's native API permits per-request reasoning control. For the
     /// configured Qwen model this is needed to obtain a timely spoken answer.
-    /// This initial variant is stateless; the session owns future context policy.
+    /// Stateless convenience method for probes and single-turn clients.
     pub async fn stream_native_chat(
         &self,
         input: &str,
         system_prompt: &str,
-        mut on_text: impl FnMut(&str),
+        on_text: impl FnMut(&str),
     ) -> Result<String> {
+        self.stream_native_chat_with_context(input, system_prompt, None, false, on_text)
+            .await
+            .map(|reply| reply.text)
+    }
+
+    /// `previous_response_id` is scoped to one conversation by the caller.
+    /// `store=false` leaves no continuation ID and keeps turns stateless.
+    pub async fn stream_native_chat_with_context(
+        &self,
+        input: &str,
+        system_prompt: &str,
+        previous_response_id: Option<&str>,
+        store: bool,
+        mut on_text: impl FnMut(&str),
+    ) -> Result<NativeReply> {
         if input.trim().is_empty() {
             bail!("chat input must not be empty");
         }
@@ -234,7 +268,8 @@ impl LmStudioBackend {
                 reasoning: "off",
                 max_output_tokens: self.config.max_output_tokens,
                 stream: true,
-                store: false,
+                store,
+                previous_response_id,
             })
             .send()
             .await
@@ -250,6 +285,7 @@ impl LmStudioBackend {
         let mut bytes = response.bytes_stream();
         let mut decoder = SseDecoder::default();
         let mut answer = String::new();
+        let mut response_id = None;
         let mut ended = false;
         while let Some(chunk) = bytes.next().await {
             for data in decoder.push(&chunk.context("LM Studio native stream disconnected")?)? {
@@ -264,6 +300,11 @@ impl LmStudioBackend {
                     }
                     Some("chat.end") => {
                         ended = true;
+                        response_id = value
+                            .get("result")
+                            .and_then(|r| r.get("response_id"))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned);
                         if let Some(final_text) = value
                             .get("result")
                             .and_then(|r| r.get("output"))
@@ -293,7 +334,10 @@ impl LmStudioBackend {
         if answer.trim().is_empty() {
             bail!("LM Studio returned no spoken answer text");
         }
-        Ok(answer)
+        Ok(NativeReply {
+            text: answer,
+            response_id,
+        })
     }
 }
 

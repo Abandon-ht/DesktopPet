@@ -1,4 +1,73 @@
 const invoke = window.__TAURI__.core.invoke;
+const voiceMessage = document.querySelector('#voice-message');
+const voicePhases = {idle:'待机', starting:'准备中', listening:'聆听中', recognizing:'识别中', thinking:'生成回复', synthesizing:'合成语音', speaking:'播放中', faulted:'需要处理'};
+const voiceFields = {
+  enabled:'voice-enabled', asr_backend:'voice-asr-backend', llm_backend:'voice-llm-backend', tts_backend:'voice-tts-backend',
+  model_dir:'voice-model-dir', asr_model_path:'voice-asr-model-path', asr_threads:'voice-asr-threads', asr_gpu:'voice-asr-gpu',
+  asr_ncnn_model_dir:'voice-asr-ncnn-model-dir', asr_ncnn_executable:'voice-asr-ncnn-executable', asr_ncnn_threads:'voice-asr-ncnn-threads', asr_ncnn_gpu:'voice-asr-ncnn-gpu', asr_mlx_model_dir:'voice-asr-mlx-model-dir', asr_mlx_device:'voice-asr-mlx-device',
+  tts_model_dir:'voice-tts-model-dir', tts_threads:'voice-tts-threads', tts_gpu:'voice-tts-gpu', tts_speaker:'voice-tts-speaker', tts_service_url:'voice-tts-service-url',
+  kokoro_model_dir:'voice-kokoro-model-dir', kokoro_threads:'voice-kokoro-threads', kokoro_gpu:'voice-kokoro-gpu',
+  vad_model_path:'voice-vad-model-path', vad_threshold:'voice-vad-threshold', vad_silence_ms:'voice-vad-silence', no_speech_timeout_secs:'voice-no-speech-timeout', rest_after_inactive_minutes:'voice-rest-inactive',
+  aec_enabled:'voice-aec-enabled', kws_enabled:'voice-kws-enabled', kws_model_dir:'voice-kws-model-dir', kws_keyword:'voice-kws-keyword', kws_keyword_en:'voice-kws-keyword-en', kws_keywords_file:'voice-kws-keywords-file', kws_threshold:'voice-kws-threshold', kws_threads:'voice-kws-threads',
+  wake_greeting_enabled:'voice-wake-greeting', timed_greetings_enabled:'voice-timed-greetings', first_greeting_enabled:'voice-first-greeting', greeting_dir:'voice-greeting-dir',
+  reference_audio:'voice-reference-audio', reference_text:'voice-reference-text', lm_studio_url:'voice-lm-url', lm_studio_model:'voice-lm-model', llm_api_key:'voice-llm-api-key', system_prompt:'voice-system-prompt', remember_context:'voice-remember-context', output_volume_percent:'voice-output-volume'
+};
+function voiceInput(key) { return document.getElementById(voiceFields[key]); }
+function renderVoiceProviders() {
+  const asr = voiceInput('asr_backend').value;
+  const tts = voiceInput('tts_backend').value;
+  const llm = voiceInput('llm_backend').value;
+  for (const panel of document.querySelectorAll('[data-provider-for]')) {
+    const [kind, value] = panel.dataset.providerFor.split(':');
+    panel.hidden = (kind === 'asr' ? asr : tts) !== value;
+  }
+  const planned = asr === 'sherpa_mlx' || tts !== 'sherpa_onnx' || ['anthropic','gemini'].includes(llm);
+  document.querySelector('#voice-provider-note').textContent = planned ? '所选后端处于规划阶段，当前可以查看和填写参数；启用语音前仍需切回已接入的后端。' : '';
+  document.querySelector('#voice-start').disabled = planned || !voiceInput('enabled').checked;
+}
+for (const key of ['asr_backend','tts_backend','llm_backend','enabled']) voiceInput(key).addEventListener('change', renderVoiceProviders);
+voiceInput('output_volume_percent').addEventListener('input', () => {
+  document.querySelector('#voice-output-volume-value').textContent = `${voiceInput('output_volume_percent').value}%`;
+});
+const voiceBackendUrls = {lm_studio:'http://127.0.0.1:1234', ollama:'http://127.0.0.1:11434/v1', llama_cpp:'http://127.0.0.1:8080/v1', open_ai:'https://api.openai.com/v1'};
+voiceInput('llm_backend').addEventListener('change', () => {
+  const url = voiceInput('lm_studio_url');
+  if (!url.value.trim() || Object.values(voiceBackendUrls).includes(url.value.trim())) {
+    url.value = voiceBackendUrls[voiceInput('llm_backend').value] || url.value;
+  }
+});
+async function refreshVoiceSettings() {
+  try {
+    const settings = await invoke('voice_settings');
+    for (const [key, id] of Object.entries(voiceFields)) {
+      const input = document.getElementById(id);
+      if (input.type === 'checkbox') input.checked = Boolean(settings[key]);
+      else input.value = settings[key] ?? '';
+    }
+    renderVoiceProviders();
+    document.querySelector('#voice-output-volume-value').textContent = `${settings.output_volume_percent}%`;
+  } catch (error) { voiceMessage.textContent = String(error); }
+}
+document.querySelector('#voice-save').addEventListener('click', async () => {
+  const settings = {};
+  for (const key of Object.keys(voiceFields)) {
+    const input = voiceInput(key);
+    settings[key] = input.type === 'checkbox' ? input.checked : ['number','range'].includes(input.type) ? Number(input.value) : input.value.trim();
+  }
+  try { await invoke('set_voice_settings', {settings}); voiceMessage.textContent = '语音设置已保存；点击角色头部开始对话。'; }
+  catch (error) { voiceMessage.textContent = String(error); }
+});
+document.querySelector('#voice-start').addEventListener('click', () => invoke('voice_start').catch(error => voiceMessage.textContent = String(error)));
+document.querySelector('#voice-stop').addEventListener('click', () => invoke('voice_stop').catch(error => voiceMessage.textContent = String(error)));
+refreshVoiceSettings();
+setInterval(async () => {
+  try {
+    const status = await invoke('voice_status');
+    document.querySelector('#voice-state').textContent = `语音：${voicePhases[status.phase] || status.phase || '待机'}${status.detail ? ` · ${status.detail}` : ''}`;
+    document.querySelector('#voice-transcript').textContent = status.transcript ? `你说：${status.transcript}` : '';
+    document.querySelector('#voice-response').textContent = status.response ? `回复：${status.response}` : '';
+  } catch (_) {}
+}, 400);
 const careFields = ['satiety', 'energy', 'mood', 'intimacy'];
 const careMessage = document.querySelector('#care-message');
 function showCare(state) {

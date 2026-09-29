@@ -7,12 +7,14 @@ publish = false
 [dependencies]
 avatar-pack = { path = "../../crates/avatar-pack" }
 anyhow.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 serde.workspace = true
 serde_json.workspace = true
 pet-core = { path = "../../crates/pet-core" }
 pet-persistence = { path = "../../crates/persistence" }
 pet-protocol = { path = "../../crates/pet-protocol" }
 pet-ipc = { path = "../../crates/pet-ipc" }
+pet-voice-session = { path = "../../crates/voice-session" }
 tauri = { version = "=2.11.5", default-features = false, features = ["wry", "compression", "tray-icon"] }
 [build-dependencies]
 tauri-build = "=2.6.3"
