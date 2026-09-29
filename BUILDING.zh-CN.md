@@ -31,7 +31,7 @@ python3 tools/release/resources.py \
 
 1. 打开 **Actions → Build macOS app (manual) → Run workflow**。
 2. 选择分支和资源 Release 标签，然后运行。
-3. 两个任务都成功后，在 **Releases** 打开新建的 `v0.1.0-alpha.<运行序号>` 预发布，下载 `DesktopPet.zip`，解压得到 `DesktopPet.app`。同一页面附有 SHA-256 校验文件；Actions 运行页也保留一份临时构建产物。
+3. 两个任务都成功后，在 **Releases** 打开新建的 `v0.1.0-alpha.<运行序号>` 预发布，下载 `DesktopPet.zip`，解压得到 `DesktopPet.app`。将 App 拖入“应用程序”后再首次启动。同一页面附有 SHA-256 校验文件；Actions 运行页也保留一份临时构建产物。
 
 工作流不会因 push 或 PR 自动运行。构建任务只读取资源 Release；只有发布任务持有创建应用预发布所需的 `contents: write` 权限。
 
@@ -45,6 +45,16 @@ python3 tools/release/package_macos.py \
   --output artifacts/local/release/DesktopPet.app
 ```
 
-程序通过相对路径加载内置人物，并从应用 Resources 目录加载模型与语音。旧版本地测试存档中的绝对路径会覆盖这些默认值；验证全新安装时请用新的 macOS 用户配置或清理旧设置。ncnn 可选后端还需要单独编译 `sherpa-ncnn-offline` 并手动指定其路径。
+程序将内置人物、模型和语音路径按 App 的 Resources 目录相对保存；移动 App 后会从新位置重新解析。用户自己选择的外部文件仍保存原路径，移动这些外部文件后须重新指定。
+
+**已有开发版存档**可能保存了旧的绝对资源路径。升级前先退出 DesktopPet，并备份 `~/Library/Application Support/dev.desktoppet.alpha/care.sqlite3` 与同目录的 `preferences.json`。然后删除数据库 `settings` 表中键为 `voice` 的一项，重新启动并配置语音；其他养成数据不受影响。若曾直接选中 App 内角色包，还需删除 `preferences.json` 让人物设置重建。不要删除整个应用数据目录。ncnn 可选后端还需要单独编译 `sherpa-ncnn-offline` 并手动指定其路径。
+
+退出应用后，可只清理旧语音设置：
+
+```sh
+cd "$HOME/Library/Application Support/dev.desktoppet.alpha"
+sqlite3 care.sqlite3 ".backup 'care-before-path-fix.sqlite3'"
+sqlite3 care.sqlite3 "DELETE FROM settings WHERE key = 'voice';"
+```
 
 再分发前请阅读[资源来源](docs/ASSETS.md)和[使用与版权说明](POLICY.md)。

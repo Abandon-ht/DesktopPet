@@ -1,4 +1,5 @@
 mod library;
+mod resource_paths;
 mod voice;
 use anyhow::{Context, Result};
 use chrono::{Local, Timelike};
@@ -20,7 +21,7 @@ use std::{
     path::PathBuf,
     process::Command,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering},
         mpsc,
     },
@@ -85,6 +86,7 @@ struct TouchPreview {
 }
 struct Shared {
     care: Mutex<Option<CareStore>>,
+    resources: OnceLock<PathBuf>,
     care_clock: CareClock,
     care_events: mpsc::SyncSender<CareSignal>,
     companion: Mutex<CompanionSettings>,
@@ -400,6 +402,7 @@ fn voice_settings(state: tauri::State<'_, Arc<Shared>>) -> Result<VoiceSettings,
 fn set_voice_settings(
     settings: VoiceSettings,
     state: tauri::State<'_, Arc<Shared>>,
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
     settings.validate().map_err(|error| error.to_string())?;
     if settings.enabled
@@ -411,7 +414,12 @@ fn set_voice_settings(
             settings.reference_audio.display()
         ));
     }
-    let serialized = serde_json::to_string(&settings).map_err(|error| error.to_string())?;
+    let resources = app
+        .path()
+        .resource_dir()
+        .map_err(|error| error.to_string())?;
+    let stored = resource_paths::for_storage(&settings, &resources);
+    let serialized = serde_json::to_string(&stored).map_err(|error| error.to_string())?;
     let mut care = state
         .care
         .lock()
@@ -1220,6 +1228,7 @@ fn run() -> Result<()> {
     let (care_tx, care_rx) = mpsc::sync_channel(32);
     let shared = Arc::new(Shared {
         care: Mutex::new(None),
+        resources: OnceLock::new(),
         care_clock: CareClock::new(),
         care_events: care_tx,
         companion: Mutex::new(CompanionSettings::default()),
@@ -1306,6 +1315,7 @@ fn run() -> Result<()> {
         })
         .setup(move |app| {
             let resource_dir = app.path().resource_dir()?;
+            let _ = setup_shared.resources.set(resource_dir.clone());
             let dev_data_dir = resource_dir.join("dev-data-dir.txt");
             let directory = if dev_data_dir.is_file() {
                 PathBuf::from(std::fs::read_to_string(dev_data_dir)?.trim())
@@ -1348,16 +1358,20 @@ fn run() -> Result<()> {
             let dev_voice_config = resource_dir.join("voice-settings.json");
             if dev_voice_config.is_file()
                 && let Ok(contents) = std::fs::read_to_string(dev_voice_config)
-                && let Ok(settings) = serde_json::from_str::<VoiceSettings>(&contents)
-                && settings.validate().is_ok()
+                && let Ok(mut settings) = serde_json::from_str::<VoiceSettings>(&contents)
             {
-                voice_settings = settings;
+                resource_paths::for_runtime(&mut settings, &resource_dir);
+                if settings.validate().is_ok() {
+                    voice_settings = settings;
+                }
             }
             if let Some(saved) = care.setting("voice")?
-                && let Ok(settings) = serde_json::from_str::<VoiceSettings>(&saved)
-                && settings.validate().is_ok()
+                && let Ok(mut settings) = serde_json::from_str::<VoiceSettings>(&saved)
             {
-                voice_settings = settings;
+                resource_paths::for_runtime(&mut settings, &resource_dir);
+                if settings.validate().is_ok() {
+                    voice_settings = settings;
+                }
             }
             if voice_settings.greeting_dir.ends_with("artifacts/wav")
                 && let Some(project_root) = voice_settings
@@ -1510,6 +1524,7 @@ mod tests {
         (
             Arc::new(Shared {
                 care: Mutex::new(None),
+                resources: OnceLock::new(),
                 care_clock: CareClock::new(),
                 care_events: care_tx,
                 companion: Mutex::new(CompanionSettings::default()),

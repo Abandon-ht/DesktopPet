@@ -63,11 +63,13 @@ pub(super) fn legacy_model_upgrade(
     Ok(None)
 }
 pub fn restore(shared: &Shared, directory: &std::path::Path, bundled: Option<&std::path::Path>) {
-    if let Ok(saved) = avatar_pack::read_json::<Saved>(&directory.join("preferences.json"))
-        && saved.version == 1
-        && (50..=150).contains(&saved.scale)
-        && saved.selected.is_file()
-    {
+    let Ok(mut saved) = avatar_pack::read_json::<Saved>(&directory.join("preferences.json")) else {
+        return;
+    };
+    if let Some(resources) = shared.resources.get() {
+        saved.selected = resource_paths::for_runtime_path(&saved.selected, resources);
+    }
+    if saved.version == 1 && (50..=150).contains(&saved.scale) && saved.selected.is_file() {
         shared.scale.store(saved.scale, Ordering::Release);
         shared.gaze_radius.store(
             if (150..=1200).contains(&saved.gaze_radius) {
@@ -128,9 +130,14 @@ pub fn save_selection(shared: &Shared, path: &std::path::Path) {
     };
     let _write = shared.preferences_write.lock().unwrap();
     let save = (|| -> Result<()> {
+        let selected = shared
+            .resources
+            .get()
+            .map(|resources| resource_paths::for_storage_path(path, resources))
+            .unwrap_or_else(|| path.to_owned());
         let saved = Saved {
             version: 1,
-            selected: path.to_owned(),
+            selected,
             scale: shared.scale.load(Ordering::Acquire),
             gaze_radius: shared.gaze_radius.load(Ordering::Acquire),
             perch_overrides: shared.perch_overrides.lock().unwrap().clone(),
