@@ -121,6 +121,8 @@ Gate：P3 真实设备验收后，点击语音可进入 macOS 首版；P4b 未�
 
 当前 Windows 仓库状态、编译探针、构建环境及更细的工作量估算见 [Windows 构建准备](../BUILDING.windows.zh-CN.md)。其中“编译出两个 `.exe`”与“桌宠功能可用、可安装”是不同里程碑；10–20 人日起是本路线图的早期跨平台阶段估算，不代表 Windows 已完成验证。
 
+当前 Linux 构建前提、X11／Wayland 能力边界、编译探针及工作量估算见 [Linux 构建准备](../BUILDING.linux.zh-CN.md)。编译出两个可执行文件与桌面交互可用、可安装同样是不同里程碑；Linux 尚无实机构建或运行验收记录。
+
 | 子阶段 | 内容 | 准入条件 |
 | --- | --- | --- |
 | P7a Windows | 透明窗口、焦点、DPI、WinEvent 吸附、WASAPI、安装包 | CPU 基线全流程；一组 NVIDIA 或 DirectML 组合专项验证 |

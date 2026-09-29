@@ -15,6 +15,8 @@
 
 Wayland 的输入由 compositor 路由到 surface，普通应用不能假定知道全局鼠标或所有其他窗口几何。XWayland 也不自动赋予观察所有原生 Wayland 窗口的能力。Linux 应拆成 X11、Wayland 基础窗口模式、可选 compositor 扩展三个支持等级。[Wayland 协议模型](https://wayland.freedesktop.org/docs/book/Protocol.html)
 
+当前仓库的 Linux 编译探针、平台适配缺口和目标环境准备见 [Linux 构建准备](../BUILDING.linux.zh-CN.md)。本节能力表是设计目标，不代表 Linux 功能已经实现或实测通过。
+
 ## macOS 原生适配
 
 宠物宿主负责自己的 NSWindow/NSView，Rust 通过受限的 AppKit 绑定完成原生调用。窗口创建、焦点、层级、移动和输入模式更新按 API 要求回到主线程；GPU 工作不阻塞窗口事件处理。
