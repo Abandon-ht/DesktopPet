@@ -6,6 +6,7 @@ languageSelect.addEventListener('change', async () => {
     applyLanguage(languageSelect.value);
     renderVoiceProviders();
     refreshVoiceStatus();
+    refreshMemory(true);
     refresh();
     refreshCompanion();
     invoke('preferences').then(showSelection).catch(() => {});
@@ -80,6 +81,111 @@ voiceInput('kws_enabled').addEventListener('change', () => {
 document.querySelector('#voice-start').addEventListener('click', () => invoke('voice_start').catch(error => voiceMessage.textContent = String(error)));
 document.querySelector('#voice-stop').addEventListener('click', () => invoke('voice_stop').catch(error => voiceMessage.textContent = String(error)));
 refreshVoiceSettings();
+const memoryEnabled = document.querySelector('#memory-enabled');
+const memoryStatus = document.querySelector('#memory-status');
+const memoryItems = document.querySelector('#memory-items');
+const memorySearch = document.querySelector('#memory-search');
+const memoryListStatus = document.querySelector('#memory-list-status');
+const memoryClearConfirm = document.querySelector('#memory-clear-confirm');
+let memorySnapshot = null;
+let memoryRefreshSequence = 0;
+function memoryButton(label, handler, className = '') {
+  const button = document.createElement('button');
+  button.type = 'button'; button.textContent = t(label); button.className = className;
+  button.addEventListener('click', handler);
+  return button;
+}
+function renderMemoryItems(resetScroll = false) {
+  if (!memorySnapshot) return;
+  const scrollTop = resetScroll ? 0 : memoryItems.scrollTop;
+  const query = memorySearch.value.trim().toLocaleLowerCase();
+  const matches = memorySnapshot.items.filter(item => item.content.toLocaleLowerCase().includes(query));
+  document.querySelector('#memory-count').textContent = `${t('显示')} ${matches.length} / ${memorySnapshot.items.length} ${t('条记忆')}`;
+  memoryItems.replaceChildren();
+  if (!matches.length) {
+    const empty = document.createElement('p'); empty.className = 'hint';
+    empty.textContent = t(query ? '没有匹配的记忆' : '还没有记忆');
+    memoryItems.append(empty);
+  }
+  for (const item of matches) {
+    const row = document.createElement('div'); row.className = 'memory-item';
+    const badge = document.createElement('span'); badge.className = 'memory-badge'; badge.textContent = t(item.confirmed ? '已确认' : '待确认');
+    const input = document.createElement('textarea'); input.rows = 2; input.maxLength = 500; input.value = item.content; input.setAttribute('aria-label', t('记忆内容'));
+    const controls = document.createElement('div'); controls.className = 'memory-controls';
+    const confirmed = document.createElement('input'); confirmed.type = 'checkbox'; confirmed.checked = item.confirmed;
+    const confirmLabel = document.createElement('label'); confirmLabel.className = 'check'; confirmLabel.append(confirmed, document.createTextNode(t('确认可用于回复')));
+    const pinned = document.createElement('input'); pinned.type = 'checkbox'; pinned.checked = item.pinned;
+    const pinLabel = document.createElement('label'); pinLabel.className = 'check'; pinLabel.append(pinned, document.createTextNode(t('固定')));
+    controls.append(confirmLabel, pinLabel);
+    controls.append(memoryButton('保存', async () => {
+      try {
+        await invoke('memory_update', {id:item.id, content:input.value, confirmed:confirmed.checked, pinned:pinned.checked});
+        memoryListStatus.textContent = t('记忆已保存'); await refreshMemory(true);
+      } catch (error) { memoryListStatus.textContent = String(error); }
+    }));
+    const forget = memoryButton('忘记', () => { memoryRefreshSequence++; forget.hidden = true; confirmation.hidden = false; }, 'danger');
+    controls.append(forget);
+    const confirmation = document.createElement('div'); confirmation.className = 'memory-confirm'; confirmation.hidden = true;
+    const warning = document.createElement('span'); warning.textContent = t('忘记这条记忆，并清除对话摘要和未压缩记录？');
+    const accept = memoryButton('确认忘记', async () => {
+      accept.disabled = true;
+      try {
+        await invoke('memory_forget', {id:item.id});
+        memoryListStatus.textContent = t('记忆已删除'); await refreshMemory(true);
+      } catch (error) { accept.disabled = false; memoryListStatus.textContent = String(error); }
+    }, 'danger');
+    const cancel = memoryButton('取消', () => { confirmation.hidden = true; forget.hidden = false; });
+    confirmation.append(warning, accept, cancel);
+    row.append(badge, input, controls, confirmation); memoryItems.append(row);
+  }
+  memoryItems.scrollTop = scrollTop;
+}
+async function refreshMemory(force = false) {
+  if (!force && (document.activeElement?.closest('#memory-items') || document.activeElement === memorySearch || memoryItems.querySelector('.memory-confirm:not([hidden])') || !memoryClearConfirm.hidden)) return;
+  const sequence = ++memoryRefreshSequence;
+  try {
+    const snapshot = await invoke('memory_snapshot');
+    if (sequence !== memoryRefreshSequence) return;
+    memorySnapshot = snapshot;
+    memoryEnabled.checked = snapshot.enabled;
+    document.querySelector('#memory-progress').textContent = `${t('待整理对话')}: ${snapshot.uncompressed_turns}`;
+    const summaryInput = document.querySelector('#memory-summary');
+    if (document.activeElement !== summaryInput) summaryInput.value = snapshot.summary;
+    renderMemoryItems();
+  } catch (error) { if (sequence === memoryRefreshSequence) memoryStatus.textContent = String(error); }
+}
+memorySearch.addEventListener('input', () => renderMemoryItems(true));
+memoryEnabled.addEventListener('change', async () => {
+  try { await invoke('memory_set_enabled', {enabled:memoryEnabled.checked}); memoryStatus.textContent = t(memoryEnabled.checked ? '长期记忆已开启' : '长期记忆已关闭，已有记录仍保留'); await refreshMemory(); }
+  catch (error) { memoryEnabled.checked = !memoryEnabled.checked; memoryStatus.textContent = String(error); }
+});
+document.querySelector('#memory-add').addEventListener('click', async () => {
+  const input = document.querySelector('#memory-new');
+  try { await invoke('memory_add', {content:input.value}); input.value = ''; memoryListStatus.textContent = t('记忆已保存'); await refreshMemory(true); }
+  catch (error) { memoryListStatus.textContent = String(error); }
+});
+document.querySelector('#memory-clear').addEventListener('click', () => { memoryClearConfirm.hidden = false; });
+document.querySelector('#memory-clear-no').addEventListener('click', () => { memoryClearConfirm.hidden = true; });
+document.querySelector('#memory-clear-yes').addEventListener('click', async event => {
+  event.currentTarget.disabled = true;
+  try {
+    await invoke('memory_clear'); memoryClearConfirm.hidden = true; memorySearch.value = '';
+    document.querySelector('#memory-clear-status').textContent = t('全部记忆已清空'); await refreshMemory(true);
+  } catch (error) { document.querySelector('#memory-clear-status').textContent = String(error); }
+  finally { event.currentTarget.disabled = false; }
+});
+document.querySelector('#memory-summary-save').addEventListener('click', async () => {
+  try { await invoke('memory_set_summary', {summary:document.querySelector('#memory-summary').value}); document.querySelector('#memory-summary-status').textContent = t('摘要已保存'); await refreshMemory(true); }
+  catch (error) { document.querySelector('#memory-summary-status').textContent = String(error); }
+});
+document.querySelector('#memory-summary-clear').addEventListener('click', async () => {
+  const summary = document.querySelector('#memory-summary');
+  if (!summary.value.trim()) { document.querySelector('#memory-summary-status').textContent = t('摘要已经为空'); return; }
+  try { await invoke('memory_set_summary', {summary:''}); summary.value = ''; document.querySelector('#memory-summary-status').textContent = t('摘要已清空'); await refreshMemory(true); }
+  catch (error) { document.querySelector('#memory-summary-status').textContent = String(error); }
+});
+refreshMemory();
+setInterval(refreshMemory, 5000);
 async function refreshVoiceStatus() {
   try {
     const status = await invoke('voice_status');

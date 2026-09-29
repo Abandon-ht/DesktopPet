@@ -1,6 +1,6 @@
 use pet_voice_session::{
     NoSpeechTimeout, TurnToken, VoicePipeline, VoiceSettings, VoiceStatus, listen_for_keyword,
-    local_pipeline, play_wav_with_volume,
+    local_pipeline_with_memory, play_wav_with_volume,
 };
 use std::path::PathBuf;
 use std::sync::{
@@ -123,6 +123,7 @@ pub struct VoiceController {
 }
 
 struct Inner {
+    memory_path: Option<PathBuf>,
     settings: Mutex<VoiceSettings>,
     language: Mutex<UiLanguage>,
     status: Mutex<VoiceStatus>,
@@ -145,9 +146,10 @@ struct VoiceRequest {
 }
 
 impl VoiceController {
-    pub fn new(settings: VoiceSettings) -> Self {
+    pub fn new(settings: VoiceSettings, memory_path: Option<PathBuf>) -> Self {
         let (trigger, receiver) = mpsc::sync_channel(1);
         let inner = Arc::new(Inner {
+            memory_path,
             settings: Mutex::new(settings),
             language: Mutex::new(UiLanguage::default()),
             status: Mutex::new(VoiceStatus {
@@ -410,7 +412,7 @@ fn run(inner: Arc<Inner>, receiver: mpsc::Receiver<()>) {
         }
         if loaded_revision != revision || loaded.is_none() {
             loaded = None;
-            match local_pipeline(&settings) {
+            match local_pipeline_with_memory(&settings, inner.memory_path.clone()) {
                 Ok(pipeline) => {
                     loaded = Some(pipeline);
                     loaded_revision = revision;

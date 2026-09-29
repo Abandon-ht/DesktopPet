@@ -9,7 +9,9 @@ use pet_core::{
     touch::{PastTouch, TouchDecision, TouchHistory, select_touch_response},
 };
 use pet_ipc::supervisor::{Host, RestartBudget};
-use pet_persistence::{CareOutcome, CareStore, StoreError, TouchOutcome};
+use pet_persistence::{
+    CareOutcome, CareStore, MemorySnapshot, MemoryStore, StoreError, TouchOutcome,
+};
 use pet_protocol::{
     AvatarCommand, AvatarEvent, BaselineExpression, DesktopCommand, DesktopEvent, HitDetail,
     HitRegion,
@@ -86,6 +88,7 @@ struct TouchPreview {
 }
 struct Shared {
     care: Mutex<Option<CareStore>>,
+    memory_path: Mutex<Option<PathBuf>>,
     resources: OnceLock<PathBuf>,
     care_clock: CareClock,
     care_events: mpsc::SyncSender<CareSignal>,
@@ -459,6 +462,86 @@ fn voice_stop(state: tauri::State<'_, Arc<Shared>>) {
     if let Some(voice) = state.voice.lock().unwrap().as_ref() {
         voice.stop();
     }
+}
+
+fn open_memory(shared: &Shared) -> Result<MemoryStore, String> {
+    let path = shared
+        .memory_path
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("记忆存档尚未就绪")?;
+    MemoryStore::open(path).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn memory_snapshot(state: tauri::State<'_, Arc<Shared>>) -> Result<MemorySnapshot, String> {
+    open_memory(state.inner())?
+        .snapshot()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn memory_set_enabled(enabled: bool, state: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
+    if !enabled {
+        voice_stop(state.clone());
+    }
+    open_memory(state.inner())?
+        .set_enabled(enabled)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn memory_add(content: String, state: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
+    open_memory(state.inner())?
+        .add_user_item(&content, state.care_clock.now_ms())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn memory_update(
+    id: i64,
+    content: String,
+    confirmed: bool,
+    pinned: bool,
+    state: tauri::State<'_, Arc<Shared>>,
+) -> Result<(), String> {
+    if open_memory(state.inner())?
+        .update_item(id, &content, confirmed, pinned, state.care_clock.now_ms())
+        .map_err(|error| error.to_string())?
+    {
+        Ok(())
+    } else {
+        Err("记忆不存在".into())
+    }
+}
+
+#[tauri::command]
+fn memory_forget(id: i64, state: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
+    voice_stop(state.clone());
+    if open_memory(state.inner())?
+        .forget_item(id)
+        .map_err(|error| error.to_string())?
+    {
+        Ok(())
+    } else {
+        Err("记忆不存在".into())
+    }
+}
+
+#[tauri::command]
+fn memory_clear(state: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
+    voice_stop(state.clone());
+    open_memory(state.inner())?
+        .clear()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn memory_set_summary(summary: String, state: tauri::State<'_, Arc<Shared>>) -> Result<(), String> {
+    open_memory(state.inner())?
+        .set_summary(&summary)
+        .map_err(|error| error.to_string())
 }
 
 fn maybe_voice_greetings(shared: &Shared) {
@@ -1228,6 +1311,7 @@ fn run() -> Result<()> {
     let (care_tx, care_rx) = mpsc::sync_channel(32);
     let shared = Arc::new(Shared {
         care: Mutex::new(None),
+        memory_path: Mutex::new(None),
         resources: OnceLock::new(),
         care_clock: CareClock::new(),
         care_events: care_tx,
@@ -1297,6 +1381,13 @@ fn run() -> Result<()> {
             set_ui_language,
             voice_start,
             voice_stop,
+            memory_snapshot,
+            memory_set_enabled,
+            memory_add,
+            memory_update,
+            memory_forget,
+            memory_clear,
+            memory_set_summary,
             library::preferences,
             expression_catalog,
             expression_baseline,
@@ -1323,10 +1414,8 @@ fn run() -> Result<()> {
                 app.path().app_data_dir()?
             };
             std::fs::create_dir_all(&directory)?;
-            let care = CareStore::open(
-                directory.join("care.sqlite3"),
-                setup_shared.care_clock.now_ms(),
-            )?;
+            let care_path = directory.join("care.sqlite3");
+            let care = CareStore::open(&care_path, setup_shared.care_clock.now_ms())?;
             if let Some(saved) = care.setting("companion")?
                 && let Ok(settings) = serde_json::from_str::<CompanionSettings>(&saved)
                 && settings.valid()
@@ -1409,10 +1498,11 @@ fn run() -> Result<()> {
                 voice_settings.reference_text =
                     std::fs::read_to_string(reference.with_extension("txt")).unwrap_or_default();
             }
-            let controller = voice::VoiceController::new(voice_settings);
+            let controller = voice::VoiceController::new(voice_settings, Some(care_path.clone()));
             controller.set_language(*setup_shared.ui_language.lock().unwrap());
             *setup_shared.voice.lock().unwrap() = Some(controller);
             *setup_shared.care.lock().unwrap() = Some(care);
+            *setup_shared.memory_path.lock().unwrap() = Some(care_path);
             *setup_shared.library.lock().unwrap() = Some(directory.clone());
             library::restore(&setup_shared, &directory, model.as_deref());
             #[cfg(target_os = "macos")]
@@ -1524,6 +1614,7 @@ mod tests {
         (
             Arc::new(Shared {
                 care: Mutex::new(None),
+                memory_path: Mutex::new(None),
                 resources: OnceLock::new(),
                 care_clock: CareClock::new(),
                 care_events: care_tx,
@@ -1743,7 +1834,7 @@ mod tests {
             reference_text: "test fixture".into(),
             ..Default::default()
         };
-        *shared.voice.lock().unwrap() = Some(voice::VoiceController::new(voice_settings));
+        *shared.voice.lock().unwrap() = Some(voice::VoiceController::new(voice_settings, None));
         *shared.library.lock().unwrap() = Some(fixture.0.clone());
         *shared.care.lock().unwrap() = Some(
             CareStore::open(fixture.0.join("care.sqlite3"), shared.care_clock.now_ms()).unwrap(),

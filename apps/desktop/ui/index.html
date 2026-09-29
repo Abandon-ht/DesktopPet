@@ -34,6 +34,21 @@
   <p id="voice-provider-note" class="hint" role="status"></p>
   <div class="actions voice-actions"><button id="voice-save">保存语音设置</button><button id="voice-start">开始聆听</button><button id="voice-stop">停止语音</button></div><p id="voice-message" class="hint" role="status"></p><p id="voice-state" role="status">语音：待机</p><p id="voice-transcript" class="hint"></p><p id="voice-response" class="hint"></p>
 </section>
+<section id="memory-panel"><h2>长期记忆</h2>
+  <label class="check"><input id="memory-enabled" type="checkbox">保存对话并自动整理记忆</label>
+  <p class="hint">默认关闭。开启后，对话保存在本机，整理时会发送给当前 LLM 服务；自动发现的事实先由你确认，确认后才用于回复。与“记住本次会话上下文”分别控制。</p>
+  <p id="memory-status" class="hint" role="status"></p>
+  <p id="memory-progress" class="hint"></p>
+  <label for="memory-new">手动添加一条记忆</label><div class="row"><input id="memory-new" maxlength="500" placeholder="例如：我喜欢喝热茶"><button id="memory-add">添加</button></div>
+  <label for="memory-search">搜索记忆</label><input id="memory-search" type="search" placeholder="输入关键词筛选记忆"><p id="memory-count" class="hint"></p>
+  <div id="memory-items" class="memory-items" aria-live="polite"></div>
+  <p id="memory-list-status" class="hint" role="status"></p>
+  <details><summary>对话摘要</summary><label for="memory-summary">可编辑的摘要</label><textarea id="memory-summary" rows="5" maxlength="1400"></textarea><button id="memory-summary-save">保存摘要</button><button id="memory-summary-clear" class="danger">清空摘要</button><p id="memory-summary-status" class="hint" role="status"></p></details>
+  <p class="hint">忘记单条记忆时会同时清除尚未压缩的对话和摘要，避免再次提取。清空会删除全部长期记忆和对话记录。</p>
+  <button id="memory-clear" class="danger">清空全部记忆</button>
+  <div id="memory-clear-confirm" class="memory-confirm" hidden><span>确定清空所有记忆、摘要和对话记录？</span><button id="memory-clear-yes" class="danger">确认清空</button><button id="memory-clear-no">取消</button></div>
+  <p id="memory-clear-status" class="hint" role="status"></p>
+</section>
 <section><h2>视线跟随</h2><label for="gaze-radius">鼠标跟随范围 <output id="gaze-radius-value">400 点</output></label><input id="gaze-radius" type="range" min="150" max="1200" step="50" value="400"><p class="hint">以角色头部附近为中心。鼠标移出范围后，视线会平滑回到正前方；这个设置对所有角色生效。</p></section>
 <section><h2>他应用窗口吸附 · 实验功能</h2><label class="check"><input id="external-snap" type="checkbox">拖到其他应用窗口的上边缘时吸附</label><label for="window-perch">窗口上沿穿过角色的位置 <output id="window-perch-value">50%</output></label><input id="window-perch" type="range" min="20" max="80" step="1" value="50"><p class="hint">50% 约为身体中部。向左调整，角色会更深地叠在窗口上；每个角色分别保存。切换窗口或应用会解除吸附。</p><p id="external-message" class="hint" role="status">需要 macOS 系统隐私授权；未启用时仍可使用屏幕底部吸附。</p></section>
 <p class="hint">关闭此窗口后，角色仍会运行。点击菜单栏中的纳西妲头像，可随时隐藏或退出。</p><button class="quiet" data-action="quit">退出 DesktopPet</button></main><script src="i18n.js"></script><script src="app.js"></script></html>

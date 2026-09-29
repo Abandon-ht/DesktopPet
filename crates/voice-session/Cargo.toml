@@ -10,6 +10,7 @@ anyhow.workspace = true
 cpal = "0.16"
 crossbeam-queue = "0.3"
 pet-inference-http = { path = "../inference-http" }
+pet-persistence = { path = "../persistence" }
 serde.workspace = true
 serde_json.workspace = true
 sherpa-onnx = { version = "=1.13.8", default-features = false, features = ["static"] }

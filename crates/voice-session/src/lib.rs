@@ -2,7 +2,9 @@
 //! Providers may be local sherpa-onnx, another native runtime, or cloud APIs.
 
 mod local;
-pub use local::{listen_for_keyword, local_pipeline, play_wav, play_wav_with_volume};
+pub use local::{
+    listen_for_keyword, local_pipeline, local_pipeline_with_memory, play_wav, play_wav_with_volume,
+};
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};

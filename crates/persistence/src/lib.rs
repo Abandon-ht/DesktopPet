@@ -7,6 +7,9 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
 use std::{path::Path, time::Duration};
 
+mod memory;
+pub use memory::{MemoryItem, MemorySnapshot, MemoryStore, PendingTurn};
+
 #[derive(Debug)]
 pub enum StoreError {
     Database(rusqlite::Error),
@@ -16,6 +19,8 @@ pub enum StoreError {
     InvalidTouchId,
     Json(serde_json::Error),
     UnsupportedSchema(i64),
+    InvalidMemoryContent,
+    InvalidMemorySummary,
 }
 
 impl std::fmt::Display for StoreError {
@@ -31,6 +36,8 @@ impl std::fmt::Display for StoreError {
             Self::InvalidTouchId => write!(f, "invalid touch session or event ID"),
             Self::Json(e) => write!(f, "touch event JSON: {e}"),
             Self::UnsupportedSchema(v) => write!(f, "unsupported database schema version {v}"),
+            Self::InvalidMemoryContent => write!(f, "memory must contain 1–500 characters"),
+            Self::InvalidMemorySummary => write!(f, "summary must contain at most 1400 characters"),
         }
     }
 }
@@ -67,7 +74,7 @@ impl CareStore {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if !(0..=2).contains(&version) {
+        if !(0..=3).contains(&version) {
             return Err(StoreError::UnsupportedSchema(version));
         }
         if version == 0 {
@@ -119,6 +126,16 @@ impl CareStore {
                 [now_utc_ms],
             )?;
             tx.pragma_update(None, "user_version", 2)?;
+            tx.commit()?;
+        }
+        if version <= 2 {
+            let tx = connection.transaction()?;
+            memory::create_schema(&tx)?;
+            tx.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_utc_ms) VALUES (3, ?1)",
+                [now_utc_ms],
+            )?;
+            tx.pragma_update(None, "user_version", 3)?;
             tx.commit()?;
         }
         Ok(Self { connection })

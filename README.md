@@ -32,6 +32,7 @@ Contributors and users must not use this project to create or distribute sexuali
 | [P3 语音流水线设计](docs/19-p3-voice-pipeline.md) | SenseVoice、ZipVoice、扬声器播放、LM Studio 后端与分步验收 |
 | [本机语音测试包](docs/21-p3-voice-test-app.md) | 编译应用路径、菜单栏新图标和 ASR/KWS/LLM/TTS 测试步骤 |
 | [多语言互动语音](docs/22-p3-localized-interactions.md) | 生日、喂食、亲密度、主动招呼、多语言音频目录和 KWS 状态 |
+| [长期记忆](docs/23-long-term-memory.md) | 跨会话存储、自动提取与压缩、召回、用户管理和验收边界 |
 
 关键结论：
 
@@ -49,6 +50,8 @@ P2-01 至 P2-06 已接入喂食、玩耍、休息、SQLite 存档、活动仲裁
 
 P3 本地语音开发版已把角色头部点击和可选中英文关键词唤醒接入半双工会话，使用 Silero VAD、sherpa-onnx 或 sherpa-ncnn SenseVoice、LM Studio、ZipVoice 和系统扬声器；模型和参考 WAV 留在本地。文本注入的扬声器链路已试跑，真实麦克风、关键词质量与桌面点击仍待验收。设置见[语音配置与互动语音](docs/20-p3-voice-settings-and-greetings.md)。
 语音设置面板已加入后端选择、高级模型与 VAD 参数、头部唤醒语音、首次见面与定时问候；可用范围与后续步骤见[语音配置与互动语音](docs/20-p3-voice-settings-and-greetings.md)。
+
+长期记忆首版已接入 SQLite、语音对话和设置面板，默认关闭。开启后保存文字轮次，后台提出待确认事实并每 6 轮生成滚动摘要；确认过的事实可用于跨会话回复。用户可编辑、固定、忘记或清空，真实模型质量与桌面操作待验收。详见[长期记忆设计与实现](docs/23-long-term-memory.md)。
 
 若曾保存原始 `.model3.json` 路径，新版会在启动时优先迁移到开发包内有效的 `manifest.json` 并保留大小设置；已选择角色包的用户保持原选择。旧程序运行期间仍可从“角色与设置…”手动导入新包。
 

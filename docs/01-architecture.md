@@ -118,7 +118,7 @@ IPC 第一版采用继承的 stdin/stdout 管道、逐行 JSON 控制消息、st
 
 ## 存储和故障恢复
 
-SQLite 是存档唯一写入端：`pet_state`、`inventory`、`care_events`、`settings`、`schema_migrations`；聊天记录单独表，用户可关闭保存或清除。音频默认仅在内存中流转。首版记忆采用最近对话和用户确认的偏好，后续需要检索时再加向量库。
+SQLite 是存档唯一写入端：`pet_state`、`inventory`、`care_events`、`settings`、`schema_migrations`，以及长期记忆的 `memory_state`、`memory_items`、`memory_turns`。长期记忆默认关闭，用户可审核自动建议、修改、忘记或清空；已确认事实和滚动摘要在有界长度内参与对话。音频默认仅在内存中流转。首版使用本地字符检索；向量检索按质量验收需要再引入。实现与限制见[长期记忆](23-long-term-memory.md)。
 
 喂食操作使用事务提交库存、宠物状态和 request_id；动画失败不重复扣道具。定期快照、迁移前备份、异常关闭后按最近已提交状态恢复。UI 只有读取投影和请求操作的能力。
 

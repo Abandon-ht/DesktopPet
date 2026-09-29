@@ -3462,6 +3462,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -3480,6 +3481,7 @@ dependencies = [
  "cpal",
  "crossbeam-queue",
  "pet-inference-http",
+ "pet-persistence",
  "serde",
  "serde_json",
  "sherpa-onnx",
