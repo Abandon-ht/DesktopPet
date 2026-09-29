@@ -1,6 +1,6 @@
 # macOS 构建说明
 
-`Build macOS app (manual)` GitHub Actions **只支持手动触发**。它在 `macos-15` Apple Silicon 环境编译程序，从指定 Release 下载分包资源，做临时签名，成功后**自动创建应用预发布 Release**，附上 `DesktopPet.zip` 和 `SHA256SUMS.txt`。同一个 ZIP 也会作为 Actions 构建产物保留 14 天。应用尚未经过 Apple 公证，在干净的 Mac 上直接双击启动也尚未验证。LLM 仍依赖用户自己启动的 LM Studio 服务，发行包不含 LLM 权重。
+`Build macOS app (manual)` GitHub Actions **只支持手动触发**。它在 `macos-15` Apple Silicon 环境编译程序，从指定 Release 下载分包资源，做临时签名，成功后**自动创建应用预发布 Release**，附上可拖拽安装的 `DesktopPet.dmg` 和 `SHA256SUMS.txt`。同一个 DMG 也会作为 Actions 构建产物保留 14 天。应用尚未经过 Apple 公证，在干净的 Mac 上直接双击启动也尚未验证。LLM 仍依赖用户自己启动的 LM Studio 服务，发行包不含 LLM 权重。
 
 ## 资源包
 
@@ -31,7 +31,7 @@ python3 tools/release/resources.py \
 
 1. 打开 **Actions → Build macOS app (manual) → Run workflow**。
 2. 选择分支和资源 Release 标签，然后运行。
-3. 两个任务都成功后，在 **Releases** 打开新建的 `v0.1.0-alpha.<运行序号>` 预发布，下载 `DesktopPet.zip`，解压得到 `DesktopPet.app`。将 App 拖入“应用程序”后再首次启动。同一页面附有 SHA-256 校验文件；Actions 运行页也保留一份临时构建产物。
+3. 两个任务都成功后，在 **Releases** 打开新建的 `v0.1.0-alpha.<运行序号>` 预发布，下载并打开 `DesktopPet.dmg`，将 `DesktopPet.app` 拖到同一窗口里的“Applications / 应用程序”快捷方式，再从“应用程序”首次启动。同一页面附有 SHA-256 校验文件；Actions 运行页也保留一份临时构建产物。
 
 工作流不会因 push 或 PR 自动运行。构建任务只读取资源 Release；只有发布任务持有创建应用预发布所需的 `contents: write` 权限。
 

@@ -38,11 +38,11 @@ jobs:
             --assets-dir artifacts/local/release-assets \
             --require-assets \
             --output artifacts/local/release/DesktopPet.app
-      - name: Upload installable ZIP
+      - name: Upload drag-install DMG
         uses: actions/upload-artifact@v4
         with:
           name: DesktopPet-macOS-arm64
-          path: artifacts/local/release/DesktopPet.zip
+          path: artifacts/local/release/DesktopPet.dmg
           if-no-files-found: error
           retention-days: 14
 
@@ -63,14 +63,14 @@ jobs:
           RESOURCE_TAG: ${{ inputs.resource_tag }}
         run: |
           set -euo pipefail
-          test -s dist/DesktopPet.zip
+          test -s dist/DesktopPet.dmg
           tag="v0.1.0-alpha.${GITHUB_RUN_NUMBER}"
-          digest="$(sha256sum dist/DesktopPet.zip | cut -d ' ' -f1)"
-          printf '%s  %s\n' "$digest" DesktopPet.zip > dist/SHA256SUMS.txt
+          digest="$(sha256sum dist/DesktopPet.dmg | cut -d ' ' -f1)"
+          printf '%s  %s\n' "$digest" DesktopPet.dmg > dist/SHA256SUMS.txt
           cat > dist/RELEASE_NOTES.md <<EOF
           macOS arm64 alpha package built by [Actions run #${GITHUB_RUN_NUMBER}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) from commit \`${GITHUB_SHA}\`.
 
-          Download \`DesktopPet.zip\`, extract \`DesktopPet.app\`, and move it to Applications. The app has an ad-hoc signature and is not Apple notarized. Direct double-click launch on a clean Mac has not yet been validated. LLM replies require your own LM Studio server and model.
+          Download and open \`DesktopPet.dmg\`, then drag \`DesktopPet.app\` onto the Applications shortcut before launching it. The app has an ad-hoc signature and is not Apple notarized. Direct double-click launch on a clean Mac has not yet been validated. LLM replies require your own LM Studio server and model.
 
           SHA-256: \`${digest}\`. A matching \`SHA256SUMS.txt\` is attached.
 
@@ -80,10 +80,10 @@ jobs:
           禁止使用本项目制作或传播涉及未成年人或明显幼态角色的色情、性化内容。
           EOF
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$tag" dist/DesktopPet.zip dist/SHA256SUMS.txt \
+            gh release upload "$tag" dist/DesktopPet.dmg dist/SHA256SUMS.txt \
               --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$tag" dist/DesktopPet.zip dist/SHA256SUMS.txt \
+            gh release create "$tag" dist/DesktopPet.dmg dist/SHA256SUMS.txt \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "DesktopPet 0.1.0 alpha ${GITHUB_RUN_NUMBER} - macOS arm64" \

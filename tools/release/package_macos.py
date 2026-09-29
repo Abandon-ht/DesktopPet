@@ -7,6 +7,7 @@ import plistlib
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,6 +29,25 @@ def unpack(archive_path, destination):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(entry) as source, target.open("wb") as output:
                     shutil.copyfileobj(source, output)
+
+
+def make_drag_install_dmg(app):
+    dmg = app.with_suffix(".dmg")
+    if dmg.exists():
+        dmg.unlink()
+    # Staging next to the app makes both moves atomic and avoids copying large models.
+    with tempfile.TemporaryDirectory(prefix="desktop-pet-dmg-", dir=app.parent) as temp:
+        staged_app = Path(temp) / app.name
+        app.rename(staged_app)
+        try:
+            (Path(temp) / "Applications").symlink_to("/Applications", target_is_directory=True)
+            subprocess.run([
+                "hdiutil", "create", "-volname", "DesktopPet", "-srcfolder", temp,
+                "-format", "UDZO", "-ov", str(dmg),
+            ], check=True)
+        finally:
+            staged_app.rename(app)
+    return dmg
 
 
 def main():
@@ -92,11 +112,8 @@ def main():
     subprocess.run(["codesign", "--force", "--sign", "-", str(helper)], check=True)
     subprocess.run(["codesign", "--force", "--sign", "-", str(app)], check=True)
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
-    zip_path = app.with_suffix(".zip")
-    if zip_path.exists():
-        zip_path.unlink()
-    subprocess.run(["ditto", "-c", "-k", "--keepParent", str(app), str(zip_path)], check=True)
-    print(f"{app}\n{zip_path}")
+    dmg = make_drag_install_dmg(app)
+    print(f"{app}\n{dmg}")
 
 
 if __name__ == "__main__":
