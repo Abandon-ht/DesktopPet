@@ -101,6 +101,9 @@ struct Shared {
     last_hit: Mutex<Option<HitDetail>>,
     last_touch: Mutex<Option<TouchView>>,
     voice: Mutex<Option<voice::VoiceController>>,
+    ui_language: Mutex<voice::UiLanguage>,
+    tray_items: Mutex<Option<[MenuItem<tauri::Wry>; 8]>>,
+    feed_voice_sequence: AtomicU64,
     scale: AtomicU16,
     gaze_radius: AtomicU16,
     perch: AtomicU16,
@@ -219,6 +222,80 @@ fn care_action(
         let _ = state.wake.try_send(());
     }
     Ok(outcome)
+}
+#[tauri::command]
+fn ui_language(state: tauri::State<'_, Arc<Shared>>) -> voice::UiLanguage {
+    *state.ui_language.lock().unwrap()
+}
+#[tauri::command]
+fn set_ui_language(
+    language: voice::UiLanguage,
+    state: tauri::State<'_, Arc<Shared>>,
+) -> Result<(), String> {
+    let serialized = serde_json::to_string(&language).map_err(|error| error.to_string())?;
+    let mut care = state
+        .care
+        .lock()
+        .map_err(|_| "设置存档不可用".to_string())?;
+    care.as_mut()
+        .ok_or("设置存档尚未就绪".to_string())?
+        .set_setting("ui_language", &serialized)
+        .map_err(|error| error.to_string())?;
+    drop(care);
+    *state.ui_language.lock().unwrap() = language;
+    if let Some(controller) = state.voice.lock().unwrap().as_ref() {
+        controller.set_language(language);
+    }
+    if let Some(items) = state.tray_items.lock().unwrap().as_ref() {
+        for (item, label) in items.iter().zip(tray_labels(language)) {
+            let _ = item.set_text(label);
+        }
+    }
+    Ok(())
+}
+fn tray_labels(language: voice::UiLanguage) -> [&'static str; 8] {
+    match language {
+        voice::UiLanguage::Zh => [
+            "显示角色",
+            "隐藏角色",
+            "角色与设置…",
+            "重试连接",
+            "停止当前互动",
+            "开启免打扰",
+            "关闭免打扰",
+            "退出 DesktopPet",
+        ],
+        voice::UiLanguage::En => [
+            "Show character",
+            "Hide character",
+            "Character and settings…",
+            "Reconnect",
+            "Stop interaction",
+            "Enable Do Not Disturb",
+            "Disable Do Not Disturb",
+            "Quit DesktopPet",
+        ],
+        voice::UiLanguage::Ja => [
+            "キャラクターを表示",
+            "キャラクターを非表示",
+            "キャラクターと設定…",
+            "再接続",
+            "交流を停止",
+            "おやすみモードをオン",
+            "おやすみモードをオフ",
+            "DesktopPet を終了",
+        ],
+        voice::UiLanguage::Ko => [
+            "캐릭터 표시",
+            "캐릭터 숨기기",
+            "캐릭터와 설정…",
+            "다시 연결",
+            "상호작용 중지",
+            "방해 금지 켜기",
+            "방해 금지 끄기",
+            "DesktopPet 종료",
+        ],
+    }
 }
 #[tauri::command]
 fn companion_settings(state: tauri::State<'_, Arc<Shared>>) -> CompanionSettings {
@@ -383,6 +460,20 @@ fn maybe_voice_greetings(shared: &Shared) {
     let Some(care) = care_guard.as_mut() else {
         return;
     };
+    let now = Local::now();
+    let today = now.format("%Y-%m-%d").to_string();
+    if settings.birthday == now.format("%m-%d").to_string()
+        && care
+            .setting("voice_last_birthday")
+            .ok()
+            .flatten()
+            .as_deref()
+            != Some(&today)
+        && voice.cue_if_idle(voice::Cue::Birthday)
+    {
+        let _ = care.set_setting("voice_last_birthday", &today);
+        return;
+    }
     if settings.first_greeting_enabled
         && care
             .setting("voice_first_greeting_done")
@@ -391,20 +482,45 @@ fn maybe_voice_greetings(shared: &Shared) {
             .as_deref()
             != Some("1")
     {
-        if voice.greet_if_idle("初次见面") {
+        if voice.cue_if_idle(voice::Cue::FirstMeeting) {
             let _ = care.set_setting("voice_first_greeting_done", "1");
+            return;
         }
+    }
+    let level = care
+        .load_at(shared.care_clock.now_ms())
+        .ok()
+        .map(|state| state.needs.intimacy)
+        .unwrap_or(0);
+    let milestone = [
+        (100, voice::Cue::IntimacyBlessing),
+        (75, voice::Cue::IntimacyFeeling),
+        (50, voice::Cue::IntimacyOpen),
+        (25, voice::Cue::IntimacySmart),
+    ]
+    .into_iter()
+    .find(|(threshold, _)| level >= *threshold);
+    let announced = care
+        .setting("voice_intimacy_announced")
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse::<u8>().ok())
+        .unwrap_or(0);
+    if let Some((threshold, cue)) = milestone
+        && threshold > announced
+        && voice.cue_if_idle(cue)
+    {
+        let _ = care.set_setting("voice_intimacy_announced", &threshold.to_string());
         return;
     }
     if !settings.timed_greetings_enabled {
         return;
     }
-    let now = Local::now();
-    let name = match now.hour() {
-        8 => "早上好",
-        12 => "午休时间到",
-        19 => "太阳落山",
-        22 => "快去睡吧",
+    let cue = match now.hour() {
+        8 => voice::Cue::Morning,
+        12 => voice::Cue::Noon,
+        19 => voice::Cue::Evening,
+        22 => voice::Cue::Night,
         _ => return,
     };
     let slot = now.format("%Y-%m-%d-%H").to_string();
@@ -414,7 +530,7 @@ fn maybe_voice_greetings(shared: &Shared) {
         .flatten()
         .as_deref()
         != Some(&slot)
-        && voice.greet_if_idle(name)
+        && voice.cue_if_idle(cue)
     {
         let _ = care.set_setting("voice_last_timed_greeting", &slot);
     }
@@ -885,6 +1001,17 @@ fn monitor(
                             }),
                         )?;
                     }
+                    if signal.action == CareAction::Feed {
+                        let cue =
+                            if shared.feed_voice_sequence.fetch_add(1, Ordering::AcqRel) % 2 == 0 {
+                                voice::Cue::FeedTaste
+                            } else {
+                                voice::Cue::FeedThought
+                            };
+                        if let Some(controller) = shared.voice.lock().unwrap().as_ref() {
+                            controller.cue_if_idle(cue);
+                        }
+                    }
                 }
                 if let Some((path, command)) = shared.preview_command.lock().unwrap().take()
                     && model.as_ref() == Some(&path)
@@ -918,7 +1045,16 @@ fn monitor(
                     maybe_voice_rest(shared);
                     next_voice_greeting_check = Instant::now() + Duration::from_secs(15);
                 }
-                *shared.activity.lock().unwrap() = core.state().activity;
+                {
+                    let mut activity = shared.activity.lock().unwrap();
+                    if *activity != Activity::Greeting
+                        && core.state().activity == Activity::Greeting
+                        && let Some(controller) = shared.voice.lock().unwrap().as_ref()
+                    {
+                        controller.cue_if_idle(voice::Cue::Greeting);
+                    }
+                    *activity = core.state().activity;
+                }
                 *shared.baseline.lock().unwrap() = core.state().baseline;
                 // A wake-up rechecks emergency atomics immediately; timeout is
                 // the heartbeat cadence, not a per-frame busy poll.
@@ -1086,6 +1222,9 @@ fn run() -> Result<()> {
         last_hit: Mutex::new(None),
         last_touch: Mutex::new(None),
         voice: Mutex::new(None),
+        ui_language: Mutex::new(voice::UiLanguage::default()),
+        tray_items: Mutex::new(None),
+        feed_voice_sequence: AtomicU64::new(0),
         scale: AtomicU16::new(100),
         gaze_radius: AtomicU16::new(400),
         perch: AtomicU16::new(50),
@@ -1131,6 +1270,8 @@ fn run() -> Result<()> {
             voice_settings,
             set_voice_settings,
             voice_status,
+            ui_language,
+            set_ui_language,
             voice_start,
             voice_stop,
             library::preferences,
@@ -1168,6 +1309,11 @@ fn run() -> Result<()> {
             {
                 *setup_shared.companion.lock().unwrap() = settings;
             }
+            if let Some(saved) = care.setting("ui_language")?
+                && let Ok(language) = serde_json::from_str::<voice::UiLanguage>(&saved)
+            {
+                *setup_shared.ui_language.lock().unwrap() = language;
+            }
             let mut voice_settings = VoiceSettings::default();
             if let Ok(current) = std::env::current_dir() {
                 let candidate = current.join("models/local");
@@ -1189,35 +1335,60 @@ fn run() -> Result<()> {
             {
                 voice_settings = settings;
             }
+            if voice_settings.greeting_dir.ends_with("artifacts/wav")
+                && let Some(project_root) = voice_settings
+                    .greeting_dir
+                    .parent()
+                    .and_then(|path| path.parent())
+                && project_root
+                    .join("artifacts/voice/zh-CN/greetings/wake.wav")
+                    .is_file()
+            {
+                voice_settings.greeting_dir = project_root.join("artifacts/voice");
+            }
             if voice_settings.greeting_dir.as_os_str().is_empty()
                 && let Ok(current) = std::env::current_dir()
-                && current.join("artifacts/wav/心事.wav").is_file()
             {
-                voice_settings.greeting_dir = current.join("artifacts/wav");
+                if current
+                    .join("artifacts/voice/zh-CN/greetings/wake.wav")
+                    .is_file()
+                {
+                    voice_settings.greeting_dir = current.join("artifacts/voice");
+                } else if current.join("artifacts/wav/心事.wav").is_file() {
+                    voice_settings.greeting_dir = current.join("artifacts/wav");
+                }
             }
             if voice_settings.reference_audio.as_os_str().is_empty()
                 && !voice_settings.greeting_dir.as_os_str().is_empty()
             {
-                voice_settings.reference_audio = voice_settings.greeting_dir.join("午休时间到.wav");
+                let reference = voice_settings.greeting_dir.join("zh-CN/greetings/noon");
+                let reference = if reference.with_extension("wav").is_file() {
+                    reference
+                } else {
+                    voice_settings.greeting_dir.join("午休时间到")
+                };
+                voice_settings.reference_audio = reference.with_extension("wav");
                 voice_settings.reference_text =
-                    std::fs::read_to_string(voice_settings.greeting_dir.join("午休时间到.txt"))
-                        .unwrap_or_default();
+                    std::fs::read_to_string(reference.with_extension("txt")).unwrap_or_default();
             }
-            *setup_shared.voice.lock().unwrap() = Some(voice::VoiceController::new(voice_settings));
+            let controller = voice::VoiceController::new(voice_settings);
+            controller.set_language(*setup_shared.ui_language.lock().unwrap());
+            *setup_shared.voice.lock().unwrap() = Some(controller);
             *setup_shared.care.lock().unwrap() = Some(care);
             *setup_shared.library.lock().unwrap() = Some(directory.clone());
             library::restore(&setup_shared, &directory, model.as_deref());
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
-            let show = MenuItem::with_id(app, "show", "显示角色", true, None::<&str>)?;
-            let hide = MenuItem::with_id(app, "hide", "隐藏角色", true, None::<&str>)?;
-            let settings = MenuItem::with_id(app, "settings", "角色与设置…", true, None::<&str>)?;
-            let retry = MenuItem::with_id(app, "retry", "重试连接", true, None::<&str>)?;
+            let labels = tray_labels(*setup_shared.ui_language.lock().unwrap());
+            let show = MenuItem::with_id(app, "show", labels[0], true, None::<&str>)?;
+            let hide = MenuItem::with_id(app, "hide", labels[1], true, None::<&str>)?;
+            let settings = MenuItem::with_id(app, "settings", labels[2], true, None::<&str>)?;
+            let retry = MenuItem::with_id(app, "retry", labels[3], true, None::<&str>)?;
             let stop_activity =
-                MenuItem::with_id(app, "stop_activity", "停止当前互动", true, None::<&str>)?;
-            let dnd_on = MenuItem::with_id(app, "dnd_on", "开启免打扰", true, None::<&str>)?;
-            let dnd_off = MenuItem::with_id(app, "dnd_off", "关闭免打扰", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "退出 DesktopPet", true, None::<&str>)?;
+                MenuItem::with_id(app, "stop_activity", labels[4], true, None::<&str>)?;
+            let dnd_on = MenuItem::with_id(app, "dnd_on", labels[5], true, None::<&str>)?;
+            let dnd_off = MenuItem::with_id(app, "dnd_off", labels[6], true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", labels[7], true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
                 &[
@@ -1231,6 +1402,16 @@ fn run() -> Result<()> {
                     &quit,
                 ],
             )?;
+            *setup_shared.tray_items.lock().unwrap() = Some([
+                show,
+                hide,
+                settings,
+                retry,
+                stop_activity,
+                dnd_on,
+                dnd_off,
+                quit,
+            ]);
             let tray_icon = if cfg!(target_os = "macos") {
                 tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?
             } else {
@@ -1321,6 +1502,9 @@ mod tests {
                 last_hit: Mutex::new(None),
                 last_touch: Mutex::new(None),
                 voice: Mutex::new(None),
+                ui_language: Mutex::new(voice::UiLanguage::default()),
+                tray_items: Mutex::new(None),
+                feed_voice_sequence: AtomicU64::new(0),
                 scale: AtomicU16::new(100),
                 gaze_radius: AtomicU16::new(400),
                 perch: AtomicU16::new(50),

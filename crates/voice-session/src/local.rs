@@ -471,9 +471,12 @@ pub fn listen_for_keyword(
         Some(LinearResampler::create(sample_rate as i32, 16000).context("KWS 重采样器创建失败")?)
     };
     stream.play().context("KWS 麦克风启动失败")?;
+    // This point is reached only after the model and input device both work.
     while keep_listening() {
         ensure!(!failed.load(Ordering::Acquire), "KWS 麦克风采集失败");
-        ensure!(!overrun.load(Ordering::Acquire), "KWS 麦克风缓冲溢出");
+        // A brief scheduler stall should not permanently disable wake-word
+        // detection. Drop the overflow flag and continue with current audio.
+        overrun.store(false, Ordering::Release);
         let mut raw = Vec::with_capacity(2048);
         while raw.len() < 2048 {
             if let Some(sample) = queue.pop() {

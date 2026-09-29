@@ -1,15 +1,31 @@
 const invoke = window.__TAURI__.core.invoke;
+const languageSelect = document.querySelector('#ui-language');
+languageSelect.addEventListener('change', async () => {
+  try {
+    await invoke('set_ui_language', {language: languageSelect.value});
+    applyLanguage(languageSelect.value);
+    renderVoiceProviders();
+    refreshVoiceStatus();
+    refresh();
+    refreshCompanion();
+    invoke('preferences').then(showSelection).catch(() => {});
+  } catch (error) { languageSelect.value = currentLanguage; document.querySelector('#detail').textContent = String(error); }
+});
+invoke('ui_language').then(language => {
+  languageSelect.value = language;
+  applyLanguage(language);
+}).catch(error => { document.querySelector('#detail').textContent = String(error); });
 const voiceMessage = document.querySelector('#voice-message');
 const voicePhases = {idle:'待机', starting:'准备中', listening:'聆听中', recognizing:'识别中', thinking:'生成回复', synthesizing:'合成语音', speaking:'播放中', faulted:'需要处理'};
 const voiceFields = {
   enabled:'voice-enabled', asr_backend:'voice-asr-backend', llm_backend:'voice-llm-backend', tts_backend:'voice-tts-backend',
   model_dir:'voice-model-dir', asr_model_path:'voice-asr-model-path', asr_threads:'voice-asr-threads', asr_gpu:'voice-asr-gpu',
-  asr_ncnn_model_dir:'voice-asr-ncnn-model-dir', asr_ncnn_executable:'voice-asr-ncnn-executable', asr_ncnn_threads:'voice-asr-ncnn-threads', asr_ncnn_gpu:'voice-asr-ncnn-gpu', asr_mlx_model_dir:'voice-asr-mlx-model-dir', asr_mlx_device:'voice-asr-mlx-device',
+  asr_ncnn_model_dir:'voice-asr-ncnn-model-dir', asr_ncnn_executable:'voice-asr-ncnn-executable', asr_ncnn_threads:'voice-asr-ncnn-threads', asr_ncnn_gpu:'voice-asr-ncnn-gpu',
   tts_model_dir:'voice-tts-model-dir', tts_threads:'voice-tts-threads', tts_gpu:'voice-tts-gpu', tts_speaker:'voice-tts-speaker', tts_service_url:'voice-tts-service-url',
   kokoro_model_dir:'voice-kokoro-model-dir', kokoro_threads:'voice-kokoro-threads', kokoro_gpu:'voice-kokoro-gpu',
   vad_model_path:'voice-vad-model-path', vad_threshold:'voice-vad-threshold', vad_silence_ms:'voice-vad-silence', no_speech_timeout_secs:'voice-no-speech-timeout', rest_after_inactive_minutes:'voice-rest-inactive',
   aec_enabled:'voice-aec-enabled', kws_enabled:'voice-kws-enabled', kws_model_dir:'voice-kws-model-dir', kws_keyword:'voice-kws-keyword', kws_keyword_en:'voice-kws-keyword-en', kws_keywords_file:'voice-kws-keywords-file', kws_threshold:'voice-kws-threshold', kws_threads:'voice-kws-threads',
-  wake_greeting_enabled:'voice-wake-greeting', timed_greetings_enabled:'voice-timed-greetings', first_greeting_enabled:'voice-first-greeting', greeting_dir:'voice-greeting-dir',
+  wake_greeting_enabled:'voice-wake-greeting', timed_greetings_enabled:'voice-timed-greetings', first_greeting_enabled:'voice-first-greeting', greeting_dir:'voice-greeting-dir', birthday:'voice-birthday',
   reference_audio:'voice-reference-audio', reference_text:'voice-reference-text', lm_studio_url:'voice-lm-url', lm_studio_model:'voice-lm-model', llm_api_key:'voice-llm-api-key', system_prompt:'voice-system-prompt', remember_context:'voice-remember-context', output_volume_percent:'voice-output-volume'
 };
 function voiceInput(key) { return document.getElementById(voiceFields[key]); }
@@ -21,8 +37,8 @@ function renderVoiceProviders() {
     const [kind, value] = panel.dataset.providerFor.split(':');
     panel.hidden = (kind === 'asr' ? asr : tts) !== value;
   }
-  const planned = asr === 'sherpa_mlx' || tts !== 'sherpa_onnx' || ['anthropic','gemini'].includes(llm);
-  document.querySelector('#voice-provider-note').textContent = planned ? '所选后端处于规划阶段，当前可以查看和填写参数；启用语音前仍需切回已接入的后端。' : '';
+  const planned = tts !== 'sherpa_onnx' || ['anthropic','gemini'].includes(llm);
+  document.querySelector('#voice-provider-note').textContent = planned ? t('所选后端处于规划阶段，当前可以查看和填写参数；启用语音前仍需切回已接入的后端。') : '';
   document.querySelector('#voice-start').disabled = planned || !voiceInput('enabled').checked;
 }
 for (const key of ['asr_backend','tts_backend','llm_backend','enabled']) voiceInput(key).addEventListener('change', renderVoiceProviders);
@@ -42,32 +58,43 @@ async function refreshVoiceSettings() {
     for (const [key, id] of Object.entries(voiceFields)) {
       const input = document.getElementById(id);
       if (input.type === 'checkbox') input.checked = Boolean(settings[key]);
-      else input.value = settings[key] ?? '';
+      else input.value = key === 'asr_backend' && settings[key] === 'sherpa_mlx' ? 'sherpa_onnx' : settings[key] ?? '';
     }
     renderVoiceProviders();
     document.querySelector('#voice-output-volume-value').textContent = `${settings.output_volume_percent}%`;
   } catch (error) { voiceMessage.textContent = String(error); }
 }
-document.querySelector('#voice-save').addEventListener('click', async () => {
+async function saveVoiceSettings() {
   const settings = {};
   for (const key of Object.keys(voiceFields)) {
     const input = voiceInput(key);
     settings[key] = input.type === 'checkbox' ? input.checked : ['number','range'].includes(input.type) ? Number(input.value) : input.value.trim();
   }
-  try { await invoke('set_voice_settings', {settings}); voiceMessage.textContent = '语音设置已保存；点击角色头部开始对话。'; }
-  catch (error) { voiceMessage.textContent = String(error); }
+  try { await invoke('set_voice_settings', {settings}); voiceMessage.textContent = t('语音设置已保存；点击角色头部开始对话。'); }
+  catch (error) { voiceMessage.textContent = String(error); throw error; }
+}
+document.querySelector('#voice-save').addEventListener('click', () => { saveVoiceSettings().catch(() => {}); });
+voiceInput('kws_enabled').addEventListener('change', () => {
+  saveVoiceSettings().catch(() => { voiceInput('kws_enabled').checked = !voiceInput('kws_enabled').checked; });
 });
 document.querySelector('#voice-start').addEventListener('click', () => invoke('voice_start').catch(error => voiceMessage.textContent = String(error)));
 document.querySelector('#voice-stop').addEventListener('click', () => invoke('voice_stop').catch(error => voiceMessage.textContent = String(error)));
 refreshVoiceSettings();
-setInterval(async () => {
+async function refreshVoiceStatus() {
   try {
     const status = await invoke('voice_status');
-    document.querySelector('#voice-state').textContent = `语音：${voicePhases[status.phase] || status.phase || '待机'}${status.detail ? ` · ${status.detail}` : ''}`;
-    document.querySelector('#voice-transcript').textContent = status.transcript ? `你说：${status.transcript}` : '';
-    document.querySelector('#voice-response').textContent = status.response ? `回复：${status.response}` : '';
+    document.querySelector('#voice-state').textContent = `${t('语音')}: ${t(voicePhases[status.phase] || status.phase || '待机')}${status.detail ? ` · ${t(status.detail)}` : ''}`;
+    document.querySelector('#voice-transcript').textContent = status.transcript ? `${{'zh-CN':'你说','en-US':'You said','ja-JP':'あなた','ko-KR':'사용자'}[currentLanguage]}: ${status.transcript}` : '';
+    document.querySelector('#voice-response').textContent = status.response ? `${{'zh-CN':'回复','en-US':'Reply','ja-JP':'返答','ko-KR':'응답'}[currentLanguage]}: ${status.response}` : '';
+    const kws = status.kws_status || 'off';
+    const kwsLabel = kws.startsWith('error:') ? `${t('需要处理')}: ${kws.slice(6)}` :
+      kws.startsWith('matched:') ? `${t('已唤醒')}: ${kws.slice(8)}` :
+      t({off:'已关闭', voice_off:'请先启用语音交互', loading:'加载模型中', listening:'正在监听', paused:'对话期间暂停'}[kws] || kws);
+    document.querySelector('#voice-kws-state').textContent = `KWS: ${kwsLabel}`;
   } catch (_) {}
-}, 400);
+}
+refreshVoiceStatus();
+setInterval(refreshVoiceStatus, 400);
 const careFields = ['satiety', 'energy', 'mood', 'intimacy'];
 const careMessage = document.querySelector('#care-message');
 function showCare(state) {
@@ -85,7 +112,7 @@ document.querySelectorAll('[data-care]').forEach(button => button.addEventListen
   try {
     const result = await invoke('care_action', { requestId, action });
     showCare(result.state);
-    careMessage.textContent = {feed: '已喂食', play: '玩耍完成', rest: '已休息'}[action];
+    careMessage.textContent = t({feed: '已喂食', play: '玩耍完成', rest: '已休息'}[action]);
   } catch (error) {
     careMessage.textContent = String(error);
     await refreshCare();
@@ -107,19 +134,19 @@ async function saveCompanion() {
     interval_minutes: Number(companionInterval.value),
     hourly_limit: Number(companionLimit.value),
   };
-  try { await invoke('set_companion_settings', { settings }); companionMessage.textContent = '设置已保存'; }
+  try { await invoke('set_companion_settings', { settings }); companionMessage.textContent = t('设置已保存'); }
   catch (error) { companionMessage.textContent = String(error); }
 }
 [companionEnabled, companionDnd, screenPlayEnabled, companionInterval, companionLimit].forEach(input => input.addEventListener('change', saveCompanion));
 document.querySelector('#stop-activity').addEventListener('click', async () => {
-  try { await invoke('stop_activity'); companionMessage.textContent = '已请求停止当前互动'; }
+  try { await invoke('stop_activity'); companionMessage.textContent = t('已请求停止当前互动'); }
   catch (error) { companionMessage.textContent = String(error); }
 });
 const activityNames = {Idle:'待机', Dragged:'拖拽中', Perched:'吸附中', Eating:'进食', Playing:'玩耍', Sleeping:'休息', Greeting:'招呼', Peeking:'探头', Inviting:'邀请', ScreenPlay:'占屏中'};
 async function refreshCompanion() {
   try {
     const activity = await invoke('companion_activity');
-    document.querySelector('#companion-activity').textContent = `当前：${activityNames[activity] || activity}`;
+    document.querySelector('#companion-activity').textContent = `${{'zh-CN':'当前','en-US':'Current','ja-JP':'現在','ko-KR':'현재'}[currentLanguage]}: ${t(activityNames[activity] || activity)}`;
     const settings = await invoke('companion_settings');
     if (document.activeElement !== companionEnabled) companionEnabled.checked = settings.enabled;
     if (document.activeElement !== companionDnd) companionDnd.checked = settings.do_not_disturb;
@@ -139,8 +166,8 @@ const labels = { starting: '启动中', connecting: '连接中', ready: '已连�
 async function refresh() {
   try {
     const s = await invoke('status');
-    document.querySelector('#status').textContent = `${labels[s.phase] || s.phase} · ${s.visible ? '请求显示' : '请求隐藏'}`;
-    document.querySelector('#detail').textContent = s.detail;
+    document.querySelector('#status').textContent = `${t(labels[s.phase] || s.phase)} · ${t(s.visible ? '请求显示' : '请求隐藏')}`;
+    document.querySelector('#detail').textContent = t(s.detail);
   } catch (error) { document.querySelector('#detail').textContent = String(error); }
 }
 document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', async () => {
@@ -163,21 +190,21 @@ async function refreshTouchCare() {
 setInterval(() => { refreshTouchCare().catch(() => {}); }, 300);
 let pendingSelectionId = null;
 function packName(path) {
-  return [...packList.options].find(option => option.value === path)?.textContent || path?.split('/').slice(-2, -1)[0] || '未选择';
+  return [...packList.options].find(option => option.value === path)?.textContent || path?.split('/').slice(-2, -1)[0] || t('未选择');
 }
 function showSelection(preferences) {
   const active = preferences.active_pack;
-  activePack.textContent = `当前角色：${packName(active)}`;
+  activePack.textContent = `${{'zh-CN':'当前角色','en-US':'Current character','ja-JP':'現在のキャラクター','ko-KR':'현재 캐릭터'}[currentLanguage]}: ${packName(active)}`;
   const selection = preferences.selection_status;
   if (pendingSelectionId === null || selection?.id !== pendingSelectionId) return;
   if (selection.phase === 'succeeded') {
     pendingSelectionId = null;
     if (active) packList.value = active;
-    message.textContent = `已切换到 ${packName(active)}`;
+    message.textContent = `${{'zh-CN':'已切换到','en-US':'Switched to','ja-JP':'切り替えました','ko-KR':'전환됨'}[currentLanguage]} ${packName(active)}`;
     lastTouchSeen = null;
   } else if (selection.phase === 'failed') {
     pendingSelectionId = null;
-    message.textContent = `${selection.error || '切换失败'}；当前仍为 ${packName(active)}`;
+    message.textContent = `${selection.error || t('切换失败')} · ${packName(active)}`;
   }
 }
 async function updatePacks(selected) {
@@ -191,13 +218,13 @@ async function updatePacks(selected) {
   return items;
 }
 document.querySelector('#import').addEventListener('click', async () => {
-  const button = document.querySelector('#import'); button.disabled = true; message.textContent = '正在检查和复制角色包…';
-  try { const selected = await invoke('import_pack', {path: document.querySelector('#pack-path').value.trim()}); pendingSelectionId = selected.id; await updatePacks(selected.path); message.textContent = '已导入，正在尝试切换角色…'; showSelection(await invoke('preferences')); }
+  const button = document.querySelector('#import'); button.disabled = true; message.textContent = t('正在检查和复制角色包…');
+  try { const selected = await invoke('import_pack', {path: document.querySelector('#pack-path').value.trim()}); pendingSelectionId = selected.id; await updatePacks(selected.path); message.textContent = t('已导入，正在尝试切换角色…'); showSelection(await invoke('preferences')); }
   catch (error) {message.textContent = String(error);}
   finally {button.disabled = false;}
 });
 document.querySelector('#switch').addEventListener('click', async () => {
-  try { if (!packList.value) return; const selected = await invoke('select_pack',{path:packList.value}); pendingSelectionId = selected.id; message.textContent = '正在尝试切换角色…'; showSelection(await invoke('preferences')); }
+  try { if (!packList.value) return; const selected = await invoke('select_pack',{path:packList.value}); pendingSelectionId = selected.id; message.textContent = t('正在尝试切换角色…'); showSelection(await invoke('preferences')); }
   catch (error) {message.textContent = String(error);}
 });
 const scale = document.querySelector('#scale');
@@ -222,7 +249,7 @@ perch.addEventListener('keyup', () => { perchEditing = false; });
 const externalHint = externalMessage.textContent;
 function showExternalPreference(p) {
   externalSnap.checked = p.external_snap;
-  externalMessage.textContent = p.external_error || (p.external_snap ? '他应用窗口吸附已开启。' : externalHint);
+  externalMessage.textContent = p.external_error || (p.external_snap ? t('他应用窗口吸附已开启。') : t(externalHint));
 }
 externalSnap.addEventListener('change', async () => {
   try { await invoke('set_external_snap', {enabled: externalSnap.checked}); }
@@ -232,7 +259,7 @@ scale.addEventListener('input', () => document.querySelector('#scale-value').tex
 scale.addEventListener('change', async () => {
   try {await invoke('set_scale',{scale:Number(scale.value)});} catch (error) {message.textContent = String(error);}
 });
-gazeRadius.addEventListener('input', () => { gazeRadiusValue.textContent = `${gazeRadius.value} 点`; });
+gazeRadius.addEventListener('input', () => { gazeRadiusValue.textContent = `${gazeRadius.value} ${t('点')}`; });
 gazeRadius.addEventListener('change', async () => {
   try { await invoke('set_gaze_radius', {radius: Number(gazeRadius.value)}); }
   catch (error) { message.textContent = String(error); }
@@ -243,10 +270,10 @@ perch.addEventListener('change', async () => {
   catch (error) { externalMessage.textContent = String(error); }
 });
 (async () => {
-  try { const p = await invoke('preferences'); await updatePacks(p.active_pack); showSelection(p); scale.value = p.scale; gazeRadius.value = p.gaze_radius; gazeRadiusValue.textContent = `${p.gaze_radius} 点`; perch.value = p.window_perch; perchValue.textContent = `${p.window_perch}%`; showExternalPreference(p); document.querySelector('#scale-value').textContent = `${p.scale}%`; }
+  try { const p = await invoke('preferences'); await updatePacks(p.active_pack); showSelection(p); scale.value = p.scale; gazeRadius.value = p.gaze_radius; gazeRadiusValue.textContent = `${p.gaze_radius} ${t('点')}`; perch.value = p.window_perch; perchValue.textContent = `${p.window_perch}%`; showExternalPreference(p); document.querySelector('#scale-value').textContent = `${p.scale}%`; }
   catch (error) {message.textContent=String(error);}
 })();
 setInterval(async () => {
-  try { const p = await invoke('preferences'); showSelection(p); if (p.error && pendingSelectionId === null && !p.selection_status) message.textContent = p.error; showExternalPreference(p); if (!gazeEditing) { gazeRadius.value = p.gaze_radius; gazeRadiusValue.textContent = `${p.gaze_radius} 点`; } if (!perchEditing) { perch.value = p.window_perch; perchValue.textContent = `${p.window_perch}%`; } }
+  try { const p = await invoke('preferences'); showSelection(p); if (p.error && pendingSelectionId === null && !p.selection_status) message.textContent = p.error; showExternalPreference(p); if (!gazeEditing) { gazeRadius.value = p.gaze_radius; gazeRadiusValue.textContent = `${p.gaze_radius} ${t('点')}`; } if (!perchEditing) { perch.value = p.window_perch; perchValue.textContent = `${p.window_perch}%`; } }
   catch (_) {}
 },1000);

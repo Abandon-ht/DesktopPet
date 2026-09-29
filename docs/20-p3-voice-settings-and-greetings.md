@@ -6,7 +6,7 @@
 
 | 配置 | 当前行为 |
 | --- | --- |
-| ASR | `sherpa-onnx` SenseVoice 或 `sherpa-ncnn` SenseVoice 2025-09-09。ncnn 适配器调用官方 `sherpa-ncnn-offline`，模型目录、程序路径和 CPU 线程数可配；`sherpa-mlx` 尚未接入。 |
+| ASR | `sherpa-onnx` SenseVoice 或 `sherpa-ncnn` SenseVoice 2025-09-09。ncnn 适配器调用官方 `sherpa-ncnn-offline`，模型目录、程序路径和 CPU 线程数可配；sherpa-mlx 暂从设置中移除。 |
 | LLM | LM Studio 默认使用原生 `/api/v1/chat`；Ollama、llama.cpp server、OpenAI API 使用可配置的 `/v1/chat/completions` 兼容接口和可选 Bearer key。兼容后端在本轮会话内最多保留最近 6 组问答。Anthropic 与 Gemini 原生适配尚未接入。 |
 | TTS | `sherpa-onnx` ZipVoice；可改模型目录、参考 WAV 与文字、1–16 CPU 线程，默认 8。qwentts.cpp 的服务地址和 Kokoro 说话人字段先预留，后端不可启用。 |
 | VAD | Silero 模型文件、阈值、句末静音时长与等待说话超时可配，默认阈值 0.5、静音 600 ms、首音 8 秒。 |
@@ -18,7 +18,7 @@
 
 面板按一次对话的使用顺序纵向排列：**Audio → ASR → VAD → KWS → LLM → TTS**。480 像素设置窗口内每块独立成卡片，常用项直接显示，高级项默认折叠；底部统一保存、开始、停止和显示状态。Audio 集中总开关、0–100% 播放音量、超时、AEC 与互动提示音。音量在同一扬声器输出端同时作用于 ZipVoice 回复和本地互动 WAV。
 
-ASR、TTS 的后端选择会切换其下方的配置面板，并保留各后端已经填过的值。sherpa-onnx 的模型文件与 CPU/GPU 设置折叠在 SenseVoice、ZipVoice 各自下方；sherpa-ncnn 展示模型目录、离线程序路径、CPU 数量及预留的 Vulkan 选项，sherpa-mlx 展示模型目录与设备，qwentts.cpp 展示服务 URL，Kokoro 展示说话人、模型、CPU/GPU。KWS 有自己的 sherpa-onnx 模型、中英文关键词、可选词表文件、阈值和 CPU 设置；VAD 的模型与阈值也单独折叠。共享模型根目录留在 Audio，因为当前 ASR、VAD 和 TTS 都从那里解析默认文件。
+ASR、TTS 的后端选择会切换其下方的配置面板，并保留各后端已经填过的值。sherpa-onnx 的模型文件与 CPU/GPU 设置折叠在 SenseVoice、ZipVoice 各自下方；sherpa-ncnn 展示模型目录、离线程序路径、CPU 数量及预留的 Vulkan 选项，qwentts.cpp 展示服务 URL，Kokoro 展示说话人、模型、CPU/GPU。KWS 有自己的 sherpa-onnx 模型、中英文关键词、可选词表文件、阈值和 CPU 设置；VAD 的模型与阈值也单独折叠。共享模型根目录留在 Audio，因为当前 ASR、VAD 和 TTS 都从那里解析默认文件。
 
 LLM 卡片新增可编辑的 **System Prompt**，默认保持原先的简短中文角色提示。保存后，LM Studio 原生请求和兼容 Chat Completions 请求都会使用它；旧存档自动获得默认值。规划中的后端可切换查看和填写参数，但启用语音时设置校验仍会拒绝未实现的后端。
 
@@ -50,3 +50,5 @@ KWS 模型为[官方中英 Zipformer 3M](https://k2-fsa.github.io/sherpa/onnx/kw
 4. **AEC 与打断**：在支持的平台验证麦克风与扬声器设备、时钟和播放参考帧，分别评估 macOS、Windows、Linux。当前不提供说话打断；即使 AEC 不可用，头部点击仍可显式打断。只有通过真实设备测试后才开放 AEC 开关。
 
 开发版可通过设置面板修改这些配置；本机示例配置与模型留在 `artifacts/local/`、`models/local/`。仓库只保留代码和文档，不提交角色素材、用户声音、模型权重或密钥。
+
+2026-09-29 后续更新：生日、喂食、主动招呼、四档亲密度语音与中英日韩目录、界面切换已接入；KWS 勾选即保存并显示监听状态。详见[多语言互动语音](22-p3-localized-interactions.md)。

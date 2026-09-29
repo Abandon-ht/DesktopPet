@@ -10,6 +10,113 @@ use std::sync::{
 };
 use std::time::Duration;
 
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub enum UiLanguage {
+    #[default]
+    #[serde(rename = "zh-CN")]
+    Zh,
+    #[serde(rename = "en-US")]
+    En,
+    #[serde(rename = "ja-JP")]
+    Ja,
+    #[serde(rename = "ko-KR")]
+    Ko,
+}
+impl UiLanguage {
+    fn directory(self) -> &'static str {
+        match self {
+            Self::Zh => "zh-CN",
+            Self::En => "en-US",
+            Self::Ja => "ja-JP",
+            Self::Ko => "ko-KR",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum Cue {
+    FirstMeeting,
+    Wake,
+    Morning,
+    Noon,
+    Evening,
+    Night,
+    Birthday,
+    FeedTaste,
+    FeedThought,
+    Greeting,
+    IntimacySmart,
+    IntimacyOpen,
+    IntimacyFeeling,
+    IntimacyBlessing,
+}
+impl Cue {
+    fn category(self) -> &'static str {
+        match self {
+            Self::FeedTaste | Self::FeedThought => "care",
+            Self::IntimacySmart
+            | Self::IntimacyOpen
+            | Self::IntimacyFeeling
+            | Self::IntimacyBlessing => "intimacy",
+            _ => "greetings",
+        }
+    }
+    fn file(self) -> &'static str {
+        match self {
+            Self::FirstMeeting => "first_meeting",
+            Self::Wake => "wake",
+            Self::Morning => "morning",
+            Self::Noon => "noon",
+            Self::Evening => "evening",
+            Self::Night => "night",
+            Self::Birthday => "birthday",
+            Self::FeedTaste => "feed_taste",
+            Self::FeedThought => "feed_thought",
+            Self::Greeting => "greeting",
+            Self::IntimacySmart => "intimacy_smart",
+            Self::IntimacyOpen => "intimacy_open",
+            Self::IntimacyFeeling => "intimacy_feeling",
+            Self::IntimacyBlessing => "intimacy_blessing",
+        }
+    }
+    fn legacy(self) -> &'static str {
+        match self {
+            Self::FirstMeeting => "初次见面",
+            Self::Wake => "心事",
+            Self::Morning => "早上好",
+            Self::Noon => "午休时间到",
+            Self::Evening => "太阳落山",
+            Self::Night => "快去睡吧",
+            Self::Birthday => "生日",
+            Self::FeedTaste => "好味道",
+            Self::FeedThought => "心意",
+            Self::Greeting => "去转转",
+            Self::IntimacySmart => "变聪明啦",
+            Self::IntimacyOpen => "思路变开阔了",
+            Self::IntimacyFeeling => "这种感觉",
+            Self::IntimacyBlessing => "赐福",
+        }
+    }
+}
+
+fn cue_path(settings: &VoiceSettings, language: UiLanguage, cue: Cue) -> Option<PathBuf> {
+    let root = &settings.greeting_dir;
+    if root.as_os_str().is_empty() {
+        return None;
+    }
+    for locale in [language.directory(), "zh-CN"] {
+        let path = root
+            .join(locale)
+            .join(cue.category())
+            .join(format!("{}.wav", cue.file()));
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let legacy = root.join(format!("{}.wav", cue.legacy()));
+    legacy.is_file().then_some(legacy)
+}
+
 #[derive(Clone)]
 pub struct VoiceController {
     inner: Arc<Inner>,
@@ -17,7 +124,9 @@ pub struct VoiceController {
 
 struct Inner {
     settings: Mutex<VoiceSettings>,
+    language: Mutex<UiLanguage>,
     status: Mutex<VoiceStatus>,
+    kws_status: Mutex<String>,
     generation: Arc<AtomicU64>,
     turn_sequence: AtomicU64,
     requested: Mutex<Option<VoiceRequest>>,
@@ -31,7 +140,7 @@ struct Inner {
 
 struct VoiceRequest {
     session_id: u64,
-    clip: Option<PathBuf>,
+    clips: Vec<PathBuf>,
     conversation: bool,
 }
 
@@ -40,10 +149,12 @@ impl VoiceController {
         let (trigger, receiver) = mpsc::sync_channel(1);
         let inner = Arc::new(Inner {
             settings: Mutex::new(settings),
+            language: Mutex::new(UiLanguage::default()),
             status: Mutex::new(VoiceStatus {
                 phase: "idle".into(),
                 ..Default::default()
             }),
+            kws_status: Mutex::new("off".into()),
             generation: Arc::new(AtomicU64::new(0)),
             turn_sequence: AtomicU64::new(0),
             requested: Mutex::new(None),
@@ -72,7 +183,9 @@ impl VoiceController {
         self.inner.settings.lock().unwrap().clone()
     }
     pub fn status(&self) -> VoiceStatus {
-        self.inner.status.lock().unwrap().clone()
+        let mut status = self.inner.status.lock().unwrap().clone();
+        status.kws_status = self.inner.kws_status.lock().unwrap().clone();
+        status
     }
 
     pub fn configure(&self, settings: VoiceSettings) {
@@ -81,29 +194,42 @@ impl VoiceController {
         self.inner.revision.fetch_add(1, Ordering::AcqRel);
     }
 
+    pub fn set_language(&self, language: UiLanguage) {
+        *self.inner.language.lock().unwrap() = language;
+    }
+
     /// Starts a conversation without a prerecorded greeting.
     pub fn click(&self) {
-        self.request(None, true);
+        self.request(Vec::new(), true);
     }
 
     /// Only a head hit uses the prerecorded wake greeting.
     pub fn head_click(&self) {
         let settings = self.settings();
-        let clip = settings
+        let clips = settings
             .wake_greeting_enabled
-            .then_some(settings.greeting_dir.as_os_str())
-            .filter(|dir| !dir.is_empty())
-            .map(|_| settings.greeting_dir.join("心事.wav"));
-        self.request(clip, true);
+            .then(|| cue_path(&settings, *self.inner.language.lock().unwrap(), Cue::Wake))
+            .flatten()
+            .into_iter()
+            .collect();
+        self.request(clips, true);
     }
 
-    pub fn greet_if_idle(&self, name: &str) -> bool {
+    pub fn cue_if_idle(&self, cue: Cue) -> bool {
+        self.cues_if_idle(&[cue])
+    }
+
+    pub fn cues_if_idle(&self, cues: &[Cue]) -> bool {
         let settings = self.settings();
         if !settings.enabled || settings.greeting_dir.as_os_str().is_empty() {
             return false;
         }
-        let clip = settings.greeting_dir.join(format!("{name}.wav"));
-        if !clip.is_file() {
+        let language = *self.inner.language.lock().unwrap();
+        let clips: Vec<_> = cues
+            .iter()
+            .filter_map(|cue| cue_path(&settings, language, *cue))
+            .collect();
+        if clips.len() != cues.len() || clips.is_empty() {
             return false;
         }
         let phase = self.status().phase;
@@ -112,7 +238,7 @@ impl VoiceController {
         {
             return false;
         }
-        self.request(Some(clip), false);
+        self.request(clips, false);
         true
     }
 
@@ -130,7 +256,7 @@ impl VoiceController {
         !self.inner.rest_claimed.swap(true, Ordering::AcqRel)
     }
 
-    fn request(&self, clip: Option<PathBuf>, conversation: bool) {
+    fn request(&self, clips: Vec<PathBuf>, conversation: bool) {
         if !self.settings().enabled || self.inner.stopped.load(Ordering::Acquire) {
             return;
         }
@@ -139,7 +265,7 @@ impl VoiceController {
         self.inner.rest_claimed.store(false, Ordering::Release);
         *self.inner.requested.lock().unwrap() = Some(VoiceRequest {
             session_id,
-            clip,
+            clips,
             conversation,
         });
         *self.inner.status.lock().unwrap() = VoiceStatus {
@@ -178,20 +304,36 @@ fn listen_for_wake_word(controller: VoiceController) {
             || inner.active.load(Ordering::Acquire)
             || !matches!(controller.status().phase.as_str(), "idle" | "faulted")
         {
+            if settings.kws_enabled && !settings.enabled {
+                *inner.kws_status.lock().unwrap() = "voice_off".into();
+            } else if !settings.kws_enabled {
+                *inner.kws_status.lock().unwrap() = "off".into();
+            } else if inner.active.load(Ordering::Acquire) {
+                *inner.kws_status.lock().unwrap() = "paused".into();
+            }
             std::thread::sleep(Duration::from_millis(150));
             continue;
         }
         let revision = inner.revision.load(Ordering::Acquire);
+        *inner.kws_status.lock().unwrap() = "loading".into();
+        let announced = AtomicBool::new(false);
         let result = listen_for_keyword(&settings, || {
+            if !announced.swap(true, Ordering::AcqRel) {
+                *inner.kws_status.lock().unwrap() = "listening".into();
+            }
             !inner.stopped.load(Ordering::Acquire)
                 && inner.revision.load(Ordering::Acquire) == revision
                 && !inner.active.load(Ordering::Acquire)
                 && matches!(controller.status().phase.as_str(), "idle" | "faulted")
         });
         match result {
-            Ok(Some(_keyword)) => controller.head_click(),
+            Ok(Some(keyword)) => {
+                *inner.kws_status.lock().unwrap() = format!("matched:{keyword}");
+                controller.head_click();
+            }
             Ok(None) => {}
             Err(error) => {
+                *inner.kws_status.lock().unwrap() = format!("error:{error:#}");
                 if controller.status().phase == "idle"
                     && inner.revision.load(Ordering::Acquire) == revision
                 {
@@ -231,7 +373,8 @@ fn run(inner: Arc<Inner>, receiver: mpsc::Receiver<()>) {
         }
         let revision = inner.revision.load(Ordering::Acquire);
         let session = TurnToken::new(inner.generation.clone(), session_id);
-        if let Some(clip) = request.clip {
+        let mut clip_failed = false;
+        for clip in request.clips {
             {
                 let mut status = inner.status.lock().unwrap();
                 status.phase = "speaking".into();
@@ -248,8 +391,12 @@ fn run(inner: Arc<Inner>, receiver: mpsc::Receiver<()>) {
                     status.phase = "faulted".into();
                     status.detail = format!("互动语音播放失败：{error:#}");
                 }
-                continue;
+                clip_failed = true;
+                break;
             }
+        }
+        if clip_failed || !session.is_current() {
+            continue;
         }
         if !request.conversation {
             if session.is_current() {

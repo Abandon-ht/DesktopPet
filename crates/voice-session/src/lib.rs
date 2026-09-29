@@ -87,6 +87,8 @@ pub struct VoiceSettings {
     pub timed_greetings_enabled: bool,
     pub first_greeting_enabled: bool,
     pub greeting_dir: PathBuf,
+    /// Recurring local-calendar birthday in MM-DD form; empty disables the cue.
+    pub birthday: String,
     pub reference_audio: PathBuf,
     pub reference_text: String,
     pub lm_studio_url: String,
@@ -139,6 +141,7 @@ impl Default for VoiceSettings {
             timed_greetings_enabled: true,
             first_greeting_enabled: true,
             greeting_dir: PathBuf::new(),
+            birthday: String::new(),
             reference_audio: PathBuf::new(),
             reference_text: String::new(),
             lm_studio_url: "http://127.0.0.1:1234".into(),
@@ -154,6 +157,29 @@ impl Default for VoiceSettings {
 
 impl VoiceSettings {
     pub fn validate(&self) -> Result<()> {
+        if !self.birthday.is_empty() {
+            let bytes = self.birthday.as_bytes();
+            let valid_shape = bytes.len() == 5
+                && bytes[2] == b'-'
+                && bytes
+                    .iter()
+                    .enumerate()
+                    .all(|(index, byte)| index == 2 || byte.is_ascii_digit());
+            if !valid_shape {
+                bail!("生日须填写 MM-DD，例如 08-16");
+            }
+            let month: u8 = self.birthday[0..2].parse()?;
+            let day: u8 = self.birthday[3..5].parse()?;
+            let max_day = match month {
+                1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+                4 | 6 | 9 | 11 => 30,
+                2 => 29,
+                _ => 0,
+            };
+            if day == 0 || day > max_day {
+                bail!("生日日期无效");
+            }
+        }
         if self.enabled && self.asr_backend == AsrBackend::SherpaMlx {
             bail!("sherpa-mlx ASR 尚未接入");
         }
@@ -244,6 +270,7 @@ impl VoiceSettings {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct VoiceStatus {
     pub phase: String,
+    pub kws_status: String,
     pub session_id: u64,
     pub turn_id: u64,
     pub transcript: String,
@@ -484,6 +511,17 @@ mod tests {
             ..settings
         };
         assert!(gpu.validate().is_err());
+    }
+
+    #[test]
+    fn recurring_birthday_accepts_leap_day_but_rejects_invalid_dates() {
+        let mut settings = VoiceSettings::default();
+        settings.birthday = "02-29".into();
+        assert!(settings.validate().is_ok());
+        for invalid in ["2-29", "02-30", "00-10", "13-01", "06-31"] {
+            settings.birthday = invalid.into();
+            assert!(settings.validate().is_err(), "{invalid}");
+        }
     }
     #[test]
     fn chinese_sentences_keep_order_and_limit() {
