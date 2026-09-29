@@ -1,5 +1,13 @@
 # DesktopPet：架构与分阶段开发设计
 
+English: [README.en.md](README.en.md) · 构建：[中文](BUILDING.zh-CN.md) / [English](BUILDING.md) · [资源来源 / Asset provenance](docs/ASSETS.md) · [使用与版权说明 / Use and copyright](POLICY.md)
+
+Contributors and users must not use this project to create or distribute sexualized content involving minors or minor-presenting characters.
+
+禁止使用本项目制作或传播涉及未成年人或明显幼态角色的色情、性化内容。
+
+版权投诉及联系删除方式见 [POLICY.md](POLICY.md)。
+
 设计日期：2026-09-16。目标：macOS 首发，Rust 为主要开发语言，后续支持 Windows、Linux。当前包含设计文档、P0 原生验证工具与 P1 开发版应用；P0 Gate 已通过，P1-01 至 P1-06 的本地 alpha 开发和用户桌面验收已完成。窗口跟随仍有少量可感知延迟，用户接受并决定停止本阶段优化；帧间隔 p95 略高于原目标，完整发行包的集成验收仍属后续阶段。
 
 建议先使用本地纳西妲 Live2D 资源，采用 **Tauri 2 + Rust 业务核心 + 独立 Mocari 0.3.1/wgpu 渲染进程**。语音先通过 sherpa-onnx 和 LM Studio 建立本地闭环，再引入 CosyVoice 等可替换推理服务。三维角色走独立 GLB/Bevy 适配路径。

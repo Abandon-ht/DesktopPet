@@ -1,0 +1,48 @@
+name: Build macOS app (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      resource_tag:
+        description: Release tag containing separately packaged build resources
+        required: true
+        default: resources-2026-09-29
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt
+      - name: Download resource archives from the selected release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESOURCE_TAG: ${{ inputs.resource_tag }}
+        run: |
+          mkdir -p artifacts/local/release-assets
+          gh release download "$RESOURCE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir artifacts/local/release-assets \
+            --pattern '*.zip' \
+            --pattern 'SHA256SUMS.json'
+      - name: Compile application and avatar host
+        run: cargo +1.95.0 build --locked --release -p desktop-pet -p avatar-host-2d
+      - name: Assemble and ad-hoc sign macOS app
+        run: |
+          python3 tools/release/package_macos.py \
+            --assets-dir artifacts/local/release-assets \
+            --require-assets \
+            --output artifacts/local/release/DesktopPet.app
+      - name: Upload installable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: DesktopPet-macOS-arm64
+          path: artifacts/local/release/DesktopPet.zip
+          if-no-files-found: error
+          retention-days: 14

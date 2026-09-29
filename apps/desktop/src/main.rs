@@ -1205,7 +1205,12 @@ fn run() -> Result<()> {
         None => {
             let config = contents.join("Resources/model-path.txt");
             if config.is_file() {
-                Some(PathBuf::from(std::fs::read_to_string(config)?.trim()))
+                let configured = PathBuf::from(std::fs::read_to_string(config)?.trim());
+                Some(if configured.is_absolute() {
+                    configured
+                } else {
+                    contents.join("Resources").join(configured)
+                })
             } else {
                 None
             }
@@ -1324,9 +1329,19 @@ fn run() -> Result<()> {
                 *setup_shared.ui_language.lock().unwrap() = language;
             }
             let mut voice_settings = VoiceSettings::default();
+            let bundled_models = resource_dir.join("models");
+            if bundled_models.join("silero_vad.onnx").is_file() {
+                voice_settings.model_dir = bundled_models;
+            }
+            let bundled_voice = resource_dir.join("voice");
+            if bundled_voice.join("zh-CN/greetings/noon.wav").is_file() {
+                voice_settings.greeting_dir = bundled_voice;
+            }
             if let Ok(current) = std::env::current_dir() {
                 let candidate = current.join("models/local");
-                if candidate.join("silero_vad.onnx").is_file() {
+                if voice_settings.model_dir.as_os_str().is_empty()
+                    && candidate.join("silero_vad.onnx").is_file()
+                {
                     voice_settings.model_dir = candidate;
                 }
             }
