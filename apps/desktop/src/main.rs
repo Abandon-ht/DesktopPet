@@ -13,7 +13,7 @@ use pet_protocol::{
     AvatarCommand, AvatarEvent, BaselineExpression, DesktopCommand, DesktopEvent, HitDetail,
     HitRegion,
 };
-use pet_voice_session::{VoiceSettings, VoiceStatus};
+use pet_voice_session::{TtsBackend, VoiceSettings, VoiceStatus};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -402,6 +402,15 @@ fn set_voice_settings(
     state: tauri::State<'_, Arc<Shared>>,
 ) -> Result<(), String> {
     settings.validate().map_err(|error| error.to_string())?;
+    if settings.enabled
+        && settings.tts_backend == TtsBackend::SherpaOnnx
+        && !settings.reference_audio.is_file()
+    {
+        return Err(format!(
+            "克隆参考 WAV 不存在：{}",
+            settings.reference_audio.display()
+        ));
+    }
     let serialized = serde_json::to_string(&settings).map_err(|error| error.to_string())?;
     let mut care = state
         .care
