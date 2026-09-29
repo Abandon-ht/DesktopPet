@@ -22,6 +22,7 @@
 | [P2 细分点击区域](docs/17-p2-fine-hit-regions.md) | 角色包 v3／v4、12 个细分区与历史校准记录 |
 | [P2 点击反应规划](docs/18-p2-touch-reactions-plan.md) | 各部位表情、关系状态规则、限制区惩罚与测试交接 |
 | [P3 语音流水线设计](docs/19-p3-voice-pipeline.md) | SenseVoice、ZipVoice、扬声器播放、LM Studio 后端与分步验收 |
+| [本机语音测试包](docs/21-p3-voice-test-app.md) | 编译应用路径、菜单栏新图标和 ASR/KWS/LLM/TTS 测试步骤 |
 
 关键结论：
 

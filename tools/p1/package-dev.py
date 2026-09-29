@@ -24,6 +24,7 @@ contents = app / 'Contents'
 (contents / 'MacOS').mkdir(parents=True, exist_ok=True)
 (contents / 'Resources').mkdir(exist_ok=True)
 shutil.copy2(root / 'target/release/desktop-pet', contents / 'MacOS/desktop-pet')
+shutil.copy2(root / 'apps/desktop/icons/icon.icns', contents / 'Resources/icon.icns')
 (contents / 'MacOS/avatar-host-2d').unlink(missing_ok=True)
 helper = contents / 'Helpers/DesktopPet Avatar Host.app/Contents'
 (helper / 'MacOS').mkdir(parents=True, exist_ok=True)
@@ -53,7 +54,8 @@ with (contents / 'Info.plist').open('wb') as stream:
     plistlib.dump(dict(CFBundleIdentifier=bundle_id, CFBundleName=app.stem,
                       CFBundleDisplayName=app.stem,
                       CFBundleExecutable='desktop-pet', CFBundlePackageType='APPL',
-                      CFBundleVersion='1', NSHighResolutionCapable=True, LSUIElement=True,
+                      CFBundleVersion='1', CFBundleIconFile='icon.icns',
+                      NSHighResolutionCapable=True, LSUIElement=True,
                       NSMicrophoneUsageDescription='点击角色或启用关键词唤醒时，需要使用麦克风识别你的话语。'), stream)
 subprocess.run(['codesign', '--force', '--sign', '-', str(helper.parent)], check=True)
 subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True)

@@ -1231,8 +1231,14 @@ fn run() -> Result<()> {
                     &quit,
                 ],
             )?;
+            let tray_icon = if cfg!(target_os = "macos") {
+                tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?
+            } else {
+                tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))?
+            };
             TrayIconBuilder::with_id("desktop-pet")
-                .title("Pet")
+                .icon(tray_icon)
+                .icon_as_template(cfg!(target_os = "macos"))
                 .tooltip("DesktopPet")
                 .menu(&menu)
                 .on_menu_event(|app, event| {

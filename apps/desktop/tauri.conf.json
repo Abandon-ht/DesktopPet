@@ -9,5 +9,5 @@
     "windows": [{ "title": "DesktopPet · 角色与设置", "width": 480, "height": 760, "visible": false, "resizable": false }],
     "security": { "csp": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src ipc: http://ipc.localhost" }
   },
-  "bundle": { "active": false }
+  "bundle": { "active": false, "icon": ["icons/icon.png", "icons/icon.icns"] }
 }
