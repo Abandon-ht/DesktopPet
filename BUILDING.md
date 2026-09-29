@@ -33,7 +33,7 @@ The output is `artifacts/local/release-assets/`, which is ignored by Git. Do not
 2. Choose the branch and the resource Release tag. Run it.
 3. After both jobs succeed, open the new `v0.1.0-alpha.<run number>` pre-release under **Releases**. Download and open `DesktopPet.dmg`, drag `DesktopPet.app` onto the Applications shortcut in the same window, and launch it from Applications. The release also contains its SHA-256 checksum. The Actions run keeps a temporary copy of the same DMG.
 
-The workflow does not run on pushes or pull requests. The build job reads the resource Release; only the publish job has `contents: write` permission to create the app pre-release. For local builds, install Rust 1.95 and Xcode command line tools, then run:
+The workflow does not run on pushes or pull requests. The build job reads the resource Release; only the publish job has `contents: write` permission to create the app pre-release. If macOS disk image creation transiently reports `Resource busy`, the packaging script removes the incomplete image and retries up to three times; other errors fail immediately. For local builds, install Rust 1.95 and Xcode command line tools, then run:
 
 ```sh
 cargo +1.95.0 build --locked --release -p desktop-pet -p avatar-host-2d

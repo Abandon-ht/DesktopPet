@@ -7,7 +7,9 @@ import plistlib
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,10 +43,24 @@ def make_drag_install_dmg(app):
         app.rename(staged_app)
         try:
             (Path(temp) / "Applications").symlink_to("/Applications", target_is_directory=True)
-            subprocess.run([
+            command = [
                 "hdiutil", "create", "-volname", "DesktopPet", "-srcfolder", temp,
                 "-format", "UDZO", "-ov", str(dmg),
-            ], check=True)
+            ]
+            for attempt in range(1, 5):
+                result = subprocess.run(command, capture_output=True, text=True)
+                if result.stdout:
+                    print(result.stdout, end="", file=sys.stdout)
+                if result.stderr:
+                    print(result.stderr, end="", file=sys.stderr)
+                if result.returncode == 0:
+                    break
+                if "Resource busy" not in result.stdout + result.stderr or attempt == 4:
+                    result.check_returncode()
+                dmg.unlink(missing_ok=True)
+                delay = 2 ** attempt
+                print(f"hdiutil resource busy; retrying DMG creation in {delay}s ({attempt}/3)", file=sys.stderr)
+                time.sleep(delay)
         finally:
             staged_app.rename(app)
     return dmg

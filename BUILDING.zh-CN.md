@@ -35,6 +35,8 @@ python3 tools/release/resources.py \
 
 工作流不会因 push 或 PR 自动运行。构建任务只读取资源 Release；只有发布任务持有创建应用预发布所需的 `contents: write` 权限。
 
+如果 macOS 磁盘映像工具在制作 DMG 时偶发报告 `Resource busy`，打包脚本会清理未完成的映像并最多重试 3 次；其他错误会立即失败。应用签名与资源校验不会因此跳过。
+
 本机需要 Rust 1.95 与 Xcode 命令行工具：
 
 ```sh
