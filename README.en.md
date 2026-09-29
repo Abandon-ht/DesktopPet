@@ -2,7 +2,7 @@
 
 DesktopPet is a macOS-first desktop companion built with Rust, Tauri 2, and a separate Mocari 0.3.1/wgpu Live2D rendering process. The current development app supports character-pack import, desktop interactions, care state, localized interaction audio, and an optional local speech pipeline using sherpa-onnx and LM Studio. Three-dimensional characters and other desktop platforms are future work.
 
-The repository includes runnable P1–P3 development code, architecture documents, and validation tools. The current macOS release workflow is manual and packages a Live2D character plus voice and speech-model resources from separate ZIP files. See [Building for macOS](BUILDING.md), [asset provenance](docs/ASSETS.md), and the [Chinese README](README.md) for the detailed development record.
+The repository includes runnable P1–P3 development code, architecture documents, and validation tools. The current macOS release workflow is manual and packages a Live2D character plus voice and speech-model resources from separate ZIP files. Windows port prerequisites and blockers are in [Windows build preparation](BUILDING.windows.md). See [Building for macOS](BUILDING.md), [asset provenance](docs/ASSETS.md), and the [Chinese README](README.md) for the detailed development record.
 
 ## Architecture
 

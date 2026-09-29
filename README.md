@@ -1,6 +1,6 @@
 # DesktopPet：架构与分阶段开发设计
 
-English: [README.en.md](README.en.md) · 构建：[中文](BUILDING.zh-CN.md) / [English](BUILDING.md) · [资源来源 / Asset provenance](docs/ASSETS.md) · [使用与版权说明 / Use and copyright](POLICY.md)
+English: [README.en.md](README.en.md) · macOS 构建：[中文](BUILDING.zh-CN.md) / [English](BUILDING.md) · Windows 构建准备：[中文](BUILDING.windows.zh-CN.md) / [English](BUILDING.windows.md) · [资源来源 / Asset provenance](docs/ASSETS.md) · [使用与版权说明 / Use and copyright](POLICY.md)
 
 Contributors and users must not use this project to create or distribute sexualized content involving minors or minor-presenting characters.
 

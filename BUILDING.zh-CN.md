@@ -1,5 +1,7 @@
 # macOS 构建说明
 
+Windows 的移植前提和当前限制见 [Windows 构建准备](BUILDING.windows.zh-CN.md)。
+
 `Build macOS app (manual)` GitHub Actions **只支持手动触发**。它在 `macos-15` Apple Silicon 环境编译程序，从指定 Release 下载分包资源，做临时签名，成功后**自动创建应用预发布 Release**，附上可拖拽安装的 `DesktopPet.dmg` 和 `SHA256SUMS.txt`。同一个 DMG 也会作为 Actions 构建产物保留 14 天。应用尚未经过 Apple 公证，在干净的 Mac 上直接双击启动也尚未验证。LLM 仍依赖用户自己启动的 LM Studio 服务，发行包不含 LLM 权重。
 
 ## 资源包

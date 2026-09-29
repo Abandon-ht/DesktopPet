@@ -1,5 +1,7 @@
 # Building DesktopPet for macOS
 
+For Windows port prerequisites and current limitations, see [Windows build preparation](BUILDING.windows.md).
+
 The `Build macOS app (manual)` GitHub Actions workflow is triggered **only** through `workflow_dispatch`. It builds an Apple Silicon (`arm64`) app on `macos-15`, adds resource archives from a selected GitHub Release, applies an ad-hoc signature, and automatically creates an app pre-release with a drag-install `DesktopPet.dmg` and `SHA256SUMS.txt`. The same DMG is retained as a workflow artifact for 14 days. The app is not notarized, and direct double-click launch on a clean Mac has not yet been validated. The app uses a local LM Studio server for LLM replies; model weights for the LLM are not included.
 
 ## Resource archives
