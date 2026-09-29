@@ -18,7 +18,7 @@ Contributors and users must not use this project to create or distribute sexuali
 | [总体架构](docs/01-architecture.md) | 进程、Rust 模块、接口、事件、状态、扩展方式 |
 | [角色与美术资产管线](docs/02-avatar-pipeline.md) | 纳西妲 Live2D 首发；PMX/FBX/Blend 到三维运行时 |
 | [桌面交互与跨平台设计](docs/03-desktop-platform.md) | 点击、穿透、吸附、主动互动、macOS/Windows/Linux 差异 |
-| [语音与硬件加速](docs/04-voice-and-compute.md) | KWS/VAD/ASR/LLM/TTS、打断、设备调度、兼容矩阵 |
+| [语音与硬件加速](docs/04-voice-and-compute.md) | KWS/VAD/ASR/LLM/TTS、打断、设备调度、联网查询与受限 Agent 规划 |
 | [分阶段开发计划](docs/05-roadmap.md) | 任务、依赖、交付物、验收条件、风险和估算 |
 | [架构决策与参考项目](docs/06-decisions-and-references.md) | ADR、开源项目借鉴范围、官方资料 |
 | [P0 实测记录](docs/07-p0-validation.md) | 固定版本构建、纳西妲参数/表情、透明 Surface、短时基线和待测项 |
@@ -52,6 +52,8 @@ P3 本地语音开发版已把角色头部点击和可选中英文关键词唤�
 语音设置面板已加入后端选择、高级模型与 VAD 参数、头部唤醒语音、首次见面与定时问候；可用范围与后续步骤见[语音配置与互动语音](docs/20-p3-voice-settings-and-greetings.md)。
 
 长期记忆首版已接入 SQLite、语音对话和设置面板，默认关闭。开启后保存文字轮次，后台提出待确认事实并每 6 轮生成滚动摘要；确认过的事实可用于跨会话回复。用户可编辑、固定、忘记或清空，真实模型质量与桌面操作待验收。详见[长期记忆设计与实现](docs/23-long-term-memory.md)。
+
+联网查询与受限 Agent 目前**仅完成文档规划，尚未实现**。首版拟由 Rust 执行只读搜索与网页读取工具，由模型提出请求并综合带来源的结果；所用模型的工具调用质量、网络边界、取消和长期记忆隔离都需单独验收。方案见[总体架构](docs/01-architecture.md)、[语音与计算设计](docs/04-voice-and-compute.md)及[路线图 P3-W](docs/05-roadmap.md)。
 
 若曾保存原始 `.model3.json` 路径，新版会在启动时优先迁移到开发包内有效的 `manifest.json` 并保留大小设置；已选择角色包的用户保持原选择。旧程序运行期间仍可从“角色与设置…”手动导入新包。
 

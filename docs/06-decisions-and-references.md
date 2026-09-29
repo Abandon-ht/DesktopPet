@@ -15,6 +15,8 @@
 | ADR-009 | 按键 → 唤醒半双工 → 全双工 | 先建立可测闭环，再解决 AEC 和自声问题 | AEC 实测通过后默认开放扬声器打断 |
 | ADR-010 | Wayland 按能力降级 | 无通用跨应用几何和任意全局定位保证 | 特定 compositor 协议与环境验证完成 |
 | ADR-011 | 应用与角色/模型包独立版本 | 本地素材存在明确再分发限制；重模型体积大 | 获得清晰分发条件后选择随包资产 |
+| ADR-012（规划） | 联网查询由 Rust 搜索/网页适配器执行，回答附来源 | LLM 本身不提供实时搜索；服务、来源与失败状态需可检查 | 固定问题集显示搜索服务无法满足准确率或可用性要求 |
+| ADR-013（规划） | Agent 首版只调用 `web_search` 和 `fetch_page` | 先验证有界只读工具循环、取消与长期记忆隔离；模型仅提出请求 | 真实模型工具调用质量不足，或产品需要新的明确授权能力 |
 
 ## 开源项目如何借鉴
 
@@ -37,7 +39,7 @@
 
 ## 官方资料索引
 
-访问日期均为 2026-09-16。`latest`/主分支链接会变化，实施阶段将选定版本和源码 SHA 固化到依赖记录。下列链接用于支持各文档中的事实；具体架构、阈值、预算和排期属于本项目设计建议。
+除另有说明，访问日期为 2026-09-16；联网查询与 Agent 条目于 2026-09-29 核对。`latest`/主分支链接会变化，实施阶段将选定版本和源码 SHA 固化到依赖记录。下列链接用于支持各文档中的事实；具体架构、阈值、预算和排期属于本项目设计建议。
 
 | 主题 | 一手资料 | 本设计采用的结论 |
 | --- | --- | --- |
@@ -54,6 +56,7 @@
 | Wayland | [协议模型](https://wayland.freedesktop.org/docs/book/Protocol.html)、[xdg-shell 协议](https://github.com/wayland-mirror/wayland-protocols/blob/main/stable/xdg-shell/xdg-shell.xml) | compositor 管理 surface 和输入；普通窗口能力不同于 X11 |
 | ASR/KWS | [SenseVoice](https://k2-fsa.github.io/sherpa/onnx/sense-voice/index.html)、[KWS](https://k2-fsa.github.io/sherpa/onnx/kws/index.html)、[C API](https://k2-fsa.github.io/sherpa/onnx/c-api/html/index.html) | 区分离线识别、流式识别和关键词检测 |
 | LM Studio | [Chat Completions](https://lmstudio.ai/docs/developer/openai-compat/chat-completions) | 可配置的本地兼容接口及流式请求参数 |
+| LM Studio 自定义工具（2026-09-29） | [接口对比](https://lmstudio.ai/docs/developer/rest)、[Tool Use](https://lmstudio.ai/docs/developer/openai-compat/tools) | 兼容端点支持自定义工具；原生 `/api/v1/chat` 当前不支持同类自定义工具，实际模型质量仍须试验 |
 | ORT 总览 | [Execution Providers](https://onnxruntime.ai/docs/execution-providers/) | 图由支持的 EP 执行，不保证单一设备覆盖全图 |
 | Apple 推理 | [CoreML EP](https://onnxruntime.ai/docs/execution-providers/CoreML-ExecutionProvider.html) | 需要核查模型/算子和 EP 配置 |
 | AMD 推理 | [ROCm EP](https://onnxruntime.ai/docs/execution-providers/ROCm-ExecutionProvider.html)、[MIGraphX EP](https://onnxruntime.ai/docs/execution-providers/MIGraphX-ExecutionProvider.html) | 旧 ROCm EP 移除；新方案按 MIGraphX 评估 |
@@ -66,6 +69,7 @@
 - 确定支持的 macOS 最低版本，以及两进程签名、TCC 权限和焦点行为。
 - 本地 SenseVoice ONNX 的真实输入/输出契约和可复用程度。
 - LM Studio 服务版本、实际模型、上下文长度、资源占用和取消语义。
+- P3-W 所用模型在兼容端点的工具请求、工具结果回传与最终正文；搜索服务来源质量及联网失败回退。
 - 首选 TTS 的中文质量与 CPU 实时率；CosyVoice 的本机或远端部署位置。
 - 具体三维模型的绑定工作量，以及可公开分发演示资产的来源。
 - Windows/Linux 目标发行版、硬件和真实测试设备。

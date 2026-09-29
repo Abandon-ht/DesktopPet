@@ -42,12 +42,14 @@ Mocari 0.3.1 发布包示例使用 winit。macOS 原生窗口与事件循环有�
 | `audio-core` | 采集、重采样、环形缓冲、播放、时钟 | LLM 提示词与长期记忆 |
 | `voice-session` | 唤醒、端点、轮次、流取消、管线调度 | 具体硬件算子实现 |
 | `inference-*` | ASR/TTS/LLM 服务适配、探测与健康状态 | 操作桌面窗口 |
+| `agent-runtime`（规划） | 工具请求解析、轮次预算、取消、结果回传与审计 | 直接信任模型输出或网页内容 |
+| `web-retrieval`（规划） | 搜索服务适配、网页正文提取、来源元数据与网络边界 | 决定角色回复或写入长期记忆 |
 | `persistence` | SQLite 迁移、事务、存档恢复、历史清理 | UI 组件状态 |
 | `app-tauri` | 组装、权限入口、托盘、进程监督、统一配置 | 每帧传输像素或网格 |
 
 `pet-core` 只依赖纯数据/时间抽象；外围适配器依赖核心定义。起步可以用一个 crate 内的模块落实这些边界，只有独立构建或依赖冲突时再拆 crate。
 
-建议最终目录如下，属于规划结构；目前已创建三个 `tools/p0-*/` 试件及根 Cargo workspace。P1-01 已新增 `crates/pet-core/` 和 `crates/pet-protocol/`；P1-02 已新增 `crates/pet-ipc/`、`apps/desktop/`、`apps/avatar-host-2d/`，P1-03 已新增 `crates/avatar-pack/`；其余模块尚未创建。当前最小契约与后续传输层边界见 [P1 实现记录](09-p1-implementation.md)：
+建议最终目录如下，属于规划结构，并非当前目录清单。核心、IPC、角色包、持久化、HTTP 推理和语音模块已逐步创建；`agent-runtime` 与 `web-retrieval` 仍是本轮规划，尚未创建。当前最小契约与传输层边界见 [P1 实现记录](09-p1-implementation.md)：
 
 ```text
 apps/desktop/             # Tauri 后端与薄 UI；Rust 偏好可用 Leptos CSR
@@ -60,6 +62,8 @@ crates/avatar-pack/
 crates/desktop-platform/
 crates/audio-core/
 crates/voice-session/
+crates/agent-runtime/       # 规划：受限工具循环
+crates/web-retrieval/       # 规划：联网搜索与网页读取
 crates/persistence/
 crates/inference-sherpa/
 crates/inference-http/
@@ -96,6 +100,7 @@ docs/
 | `AsrPort` | 指定语言、完整 utterance 或受支持的流 | Transcript（注明 partial/final）、Timing、Failure |
 | `TtsPort` | 文本、voice_id、style、turn_id | PCM Chunk、可选音素时间戳、End |
 | `LlmPort` | 对话消息、受限动作 schema、取消令牌 | TextDelta、ActionProposal、Done、Failure |
+| `ToolPort`（规划） | 经校验的工具名、参数、轮次 ID、取消令牌 | 有界结果、来源、Failure |
 
 所有适配器有 `probe`、`load/warmup`、`health`、`cancel`、`shutdown` 生命周期。探测仅说明可用候选；模型加载并通过 smoke test 才标记 ready。阻塞 FFI 使用专用工作线程，不占用 Tokio 或音频回调线程。
 
@@ -115,6 +120,22 @@ IPC 第一版采用继承的 stdin/stdout 管道、逐行 JSON 控制消息、st
 命令返回 accepted/rejected，再通过动作事件报告完成；有副作用的命令用 request_id 去重。取消/隐藏消息有独立高优先级队列。视线、鼠标位置、口型包络采用最新值覆盖；动作消息可靠有序。正常 10–30 Hz 语义更新，宿主内部 30/60 Hz 插值，不通过 IPC 传整帧图像。音频走独立有界二进制流，不放进 Tauri JSON events。
 
 能力协商返回：角色支持的动作/表情/口型、平台是否支持全局定位/跨应用观察/穿透/快捷键、推理服务是否支持流式输入/输出/取消/时间戳。缺少能力时由核心选择替代动作，而不是让 UI 或模型适配器静默失败。
+
+## 联网查询与受限 Agent（规划）
+
+当前 `inference-http` 只转发模型的正文增量，忽略工具字段；`voice-session` 每轮只调用一次 LLM。因此联网查询和 Agent 尚未实现，不能靠修改 System Prompt 启用。首版 Agent 只注册 `web_search` 与 `fetch_page` 两个只读工具，负责在一次用户提问中决定是否查询、调用工具、读回结果并形成带来源的回答。搜索服务和网页抓取由 Rust 适配器完成，模型不能自行建立网络连接。
+
+```mermaid
+flowchart LR
+  ASK[用户问题 / ASR 最终文本] --> AGENT[AgentRuntime / 有界工具循环]
+  AGENT <-->|消息与工具请求| LLM[LLM 适配器]
+  AGENT -->|校验后的请求| WEB[WebRetrieval / 搜索与网页读取]
+  WEB -->|正文摘录 + 来源| AGENT
+  AGENT --> ANSWER[最终正文 + 来源]
+  ANSWER --> VOICE[界面显示 / 可朗读正文]
+```
+
+`AgentRuntime` 属于主程序的对话业务层，与 `VoiceSession` 共用取消令牌及轮次身份；它不进入 Avatar Host，也不改 PetCore 的状态。搜索结果、网页摘录和模型工具请求分别带结构化类型，只有最终回答正文进入 TTS。联网不可用、工具调用格式错误或超过预算时，应给出明确状态，并允许无联网能力的普通对话继续运行。具体网络边界、模型接口选择和验收见[语音与硬件加速](04-voice-and-compute.md)及[路线图 P3-W](05-roadmap.md)。
 
 ## 存储和故障恢复
 
