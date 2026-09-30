@@ -24,13 +24,13 @@
 先退出旧开发版，再启动已更新的本地应用：
 
 ```sh
-open "/Users/ncy/Projects/DesktopPet/artifacts/local/p1/DesktopPet Dev.app"
+open "./artifacts/local/p1/DesktopPet Dev.app"
 ```
 
 菜单栏 **Pet → 角色与设置…**，导入下面的新包（旧包不自动补充视线映射）：
 
 ```text
-/Users/ncy/Projects/DesktopPet/artifacts/local/p1/nahida-motion-pack/manifest.json
+./artifacts/local/p1/nahida-motion-pack/manifest.json
 ```
 
 2026-09-24 修复：先前保存的原始 `.model3.json` 会覆盖开发包里的 `manifest.json`，导致角色保持默认姿态且没有点击表情。新版启动时若发现这种旧选择和有效的打包角色包，会先导入角色包到私有库、更新选择并保留大小。已选择角色包的用户不会被覆盖。若旧应用仍在运行，须从菜单栏退出后打开新版；也可在旧版设置里手动导入上述包立即切换。本地修正版位于 `artifacts/local/p1/DesktopPet Motion Fix.app`。该模型没有动作文件；本轮可见动作限于眨眼、视线/轻微头部跟随及头/身体点击表情。

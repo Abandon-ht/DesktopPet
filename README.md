@@ -1,6 +1,6 @@
 # DesktopPet：架构与分阶段开发设计
 
-English: [README.en.md](README.en.md) · macOS 构建：[中文](BUILDING.zh-CN.md) / [English](BUILDING.md) · Windows 构建准备：[中文](BUILDING.windows.zh-CN.md) / [English](BUILDING.windows.md) · Linux 构建准备：[中文](BUILDING.linux.zh-CN.md) / [English](BUILDING.linux.md) · [资源来源 / Asset provenance](docs/ASSETS.md) · [使用与版权说明 / Use and copyright](POLICY.md)
+English: [README.en.md](README.en.md) · macOS 构建：[中文](BUILDING.zh-CN.md) / [English](BUILDING.md) · Windows 构建：[中文](BUILDING.windows.zh-CN.md) / [English](BUILDING.windows.md) · Linux 构建准备：[中文](BUILDING.linux.zh-CN.md) / [English](BUILDING.linux.md) · [资源来源 / Asset provenance](docs/ASSETS.md) · [使用与版权说明 / Use and copyright](POLICY.md)
 
 Contributors and users must not use this project to create or distribute sexualized content involving minors or minor-presenting characters.
 
@@ -11,6 +11,8 @@ Contributors and users must not use this project to create or distribute sexuali
 设计日期：2026-09-16。目标：macOS 首发，Rust 为主要开发语言，后续支持 Windows、Linux。当前包含设计文档、P0 原生验证工具与 P1 开发版应用；P0 Gate 已通过，P1-01 至 P1-06 的本地 alpha 开发和用户桌面验收已完成。窗口跟随仍有少量可感知延迟，用户接受并决定停止本阶段优化；帧间隔 p95 略高于原目标，完整发行包的集成验收仍属后续阶段。
 
 建议先使用本地纳西妲 Live2D 资源，采用 **Tauri 2 + Rust 业务核心 + 独立 Mocari 0.3.1/wgpu 渲染进程**。语音先通过 sherpa-onnx 和 LM Studio 建立本地闭环，再引入 CosyVoice 等可替换推理服务。三维角色走独立 GLB/Bevy 适配路径。
+
+Windows 分支的基础桌宠、他应用窗口吸附和 Ollama 本地语音已通过本机用户功能验收。可通过 [手动 Windows Actions 与签名流程](docs/windows-ci-signing.md) 构建开发签名的 x64 便携包；自签名证书无默认 Windows 信任，安装器、混合 DPI、其他设备及长期稳定性仍待专项完成。
 
 | 文档 | 内容 |
 | --- | --- |

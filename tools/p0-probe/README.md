@@ -109,7 +109,7 @@ P0_INPUT=dynamic P0_SNAP=1 target/release/p0-probe window "/absolute/path/model.
 在 macOS 自带“终端”应用中新开一个方便拖拽的窗口，运行：
 
 ```sh
-cd /Users/ncy/Projects/DesktopPet
+cd .
 mkdir -p artifacts/local/p0
 xcrun swiftc -warnings-as-errors tools/p0-probe/ax-observer.swift -o artifacts/local/p0/ax-observer
 artifacts/local/p0/ax-observer com.apple.Terminal 120 | tee artifacts/local/p0/ax-manual.jsonl

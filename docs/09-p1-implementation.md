@@ -37,7 +37,7 @@ P1-01 完成时，P1-02 需要将 P0 已验证的 256 KiB 有界行协议、握�
 
 ## P1-01 验证记录
 
-在 `/Users/ncy/Projects/DesktopPet` 执行：
+在 `.` 执行：
 
 ```sh
 cargo test -p pet-core -p pet-protocol

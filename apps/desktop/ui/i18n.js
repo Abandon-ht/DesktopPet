@@ -1,6 +1,7 @@
 // UI copy is keyed by its original Chinese text. Record each source text node
 // once so switching languages never translates an already translated string.
 const translations = {
+  'Windows 可直接开启；macOS 需要系统隐私授权。先点击目标窗口，再拖动角色到其上边缘。':['Enable directly on Windows; macOS requires privacy permission. Click the target window, then drag the pet to its top edge.','Windows では直接有効にできます。macOS はプライバシー権限が必要です。対象ウィンドウをクリックしてから、ペットを上辺へドラッグしてください。','Windows에서 바로 켤 수 있으며 macOS는 개인정보 권한이 필요합니다. 대상 창을 클릭한 후 펫을 위쪽 가장자리로 드래그하세요.'],
   '界面语言':['Interface language','表示言語','화면 언어'],
   'DESKTOPPET · 本地预览':['DESKTOPPET · Local preview','DESKTOPPET · ローカルプレビュー','DESKTOPPET · 로컬 미리보기'],
   '你的桌面伙伴':['Your desktop companion','デスクトップの相棒','나의 데스크톱 친구'],

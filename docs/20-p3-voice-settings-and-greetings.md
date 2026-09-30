@@ -24,7 +24,7 @@ LLM 卡片新增可编辑的 **System Prompt**，默认保持原先的简短中�
 
 接口继续用 `InputPort`、`AsrPort`、`LlmPort`、`TtsPort`、`PlaybackPort` 隔离提供方。`TtsPort` 通过 PCM 块回调交付音频；未来的 qwentts.cpp 服务、云端 ASR/TTS、Anthropic/Gemini 等分别实现端口，不需要更改角色点击逻辑。设置采用向后兼容默认值读取旧的 `voice` 存档。
 
-Ollama、llama.cpp server 与 OpenAI API 的兼容路径已接线，但本轮未连接这些服务做实际生成验证；具体模型 ID、鉴权和响应格式仍须分别试跑。[Ollama 兼容接口](https://ollama.com/blog/openai-compatibility)、[llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) 均提供对应的 Chat Completions 路径。
+2026-09-30 Windows 验收补充：Ollama 0.35.0／Qwen3.5 9B 的真实流式回复、CPU ZipVoice 合成和 CPAL 播放通过，用户确认本机语音功能正常。Ollama 请求携带 `reasoning_effort: none`，供语音正文生成；具体模型能力仍须实测。llama.cpp server 与 OpenAI API 的兼容路径已接线但尚未补充本轮实际服务验证。[Ollama 兼容接口](https://docs.ollama.com/api/openai-compatibility)、[llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)。
 
 ## 互动语音规则
 

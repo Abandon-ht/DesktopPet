@@ -12,6 +12,8 @@ pub struct LmStudioConfig {
     pub base_url: String,
     pub model_id: String,
     pub api_key: Option<String>,
+    /// Ollama voice replies should spend their token budget on spoken content.
+    pub disable_thinking: bool,
     pub max_output_tokens: u32,
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
@@ -23,6 +25,7 @@ impl LmStudioConfig {
             base_url: base_url.into(),
             model_id: model_id.into(),
             api_key: None,
+            disable_thinking: false,
             max_output_tokens: 512,
             connect_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(180),
@@ -186,6 +189,7 @@ impl LmStudioBackend {
                 messages,
                 max_tokens: self.config.max_output_tokens,
                 stream: true,
+                reasoning_effort: self.config.disable_thinking.then_some("none"),
             })
             .send()
             .await
@@ -251,17 +255,21 @@ impl LmStudioBackend {
     ) -> Result<ToolChatReply> {
         ensure_tool_messages(messages)?;
         let url = self.base_url.join("chat/completions")?;
+        let mut request = serde_json::json!({
+            "model": self.config.model_id,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": if allow_tools { "auto" } else { "none" },
+            "max_tokens": self.config.max_output_tokens.max(768),
+            "stream": false
+        });
+        if self.config.disable_thinking {
+            request["reasoning_effort"] = "none".into();
+        }
         let response = self
             .client
             .post(url)
-            .json(&serde_json::json!({
-                "model": self.config.model_id,
-                "messages": messages,
-                "tools": tools,
-                "tool_choice": if allow_tools { "auto" } else { "none" },
-                "max_tokens": self.config.max_output_tokens.max(768),
-                "stream": false
-            }))
+            .json(&request)
             .send()
             .await
             .context("工具对话请求失败")?;
@@ -461,6 +469,8 @@ struct ChatRequest<'a> {
     messages: &'a [ChatMessage],
     max_tokens: u32,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'static str>,
 }
 
 fn ensure_tool_messages(messages: &[serde_json::Value]) -> Result<()> {

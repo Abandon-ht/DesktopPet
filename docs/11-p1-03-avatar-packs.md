@@ -36,20 +36,20 @@ IPC 增加 avatar、poll 和 SetScale，保持 v1 信封校验。可见时最多
 先退出旧开发版，再运行：
 
 ```sh
-open "/Users/ncy/Projects/DesktopPet/artifacts/local/p1/DesktopPet Dev.app"
+open "./artifacts/local/p1/DesktopPet Dev.app"
 ```
 
 打开菜单栏 **Pet → 角色与设置…**。
 
 1. **导入**：粘贴以下已准备的本地包路径，点击「导入并切换」。应出现“纳西妲 · 本地角色”，角色正常显示；再次导入同一路径不会增加重复项。
 
-   `/Users/ncy/Projects/DesktopPet/artifacts/local/p1/nahida-pack/manifest.json`
+   `./artifacts/local/p1/nahida-pack/manifest.json`
 
 2. **点击与拖拽**：短按头部触发 Happy1，短按身体触发 Shy，随后恢复默认；拖动角色应不触发点击表情。当前多边形是从 P0 粗略区域校准的初版，需要你确认位置是否合适。
 3. **大小**：调整到 50%、100%、150%，分别点击头/身体、拖拽并检查透明区穿透。区域应跟随角色缩放，表情不应让角色整体跳动。
 4. **坏包与切换**：导入下列故意不兼容的包，应给出错误且当前角色继续运行；随后在已导入列表点击「切换角色」，应正常重载，不留下旧宿主。
 
-   `/Users/ncy/Projects/DesktopPet/artifacts/local/p1/invalid-pack/manifest.json`
+   `./artifacts/local/p1/invalid-pack/manifest.json`
 
 5. **恢复与退出**：选择 75% 大小，退出并重新启动，应恢复已导入角色和 75%；隐藏/显示、退出仍正常。
 

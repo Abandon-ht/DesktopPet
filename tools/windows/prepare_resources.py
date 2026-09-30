@@ -20,17 +20,17 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def main():
-    checks = json.loads((ARCHIVES / "SHA256SUMS.json").read_text(encoding="utf-8"))
-    for name in NAMES:
-        archive = ARCHIVES / name
+def prepare(archives=ARCHIVES, output=DESTINATION, names=NAMES):
+    checks = json.loads((archives / "SHA256SUMS.json").read_text(encoding="utf-8"))
+    for name in names:
+        archive = archives / name
         if archive.stat().st_size != checks[name]["bytes"] or sha256(archive) != checks[name]["sha256"]:
             raise SystemExit("Resource checksum mismatch: " + name)
 
-    DESTINATION.mkdir(parents=True, exist_ok=True)
-    destination = DESTINATION.resolve()
-    for name in NAMES:
-        with zipfile.ZipFile(ARCHIVES / name) as archive:
+    output.mkdir(parents=True, exist_ok=True)
+    destination = output.resolve()
+    for name in names:
+        with zipfile.ZipFile(archives / name) as archive:
             for entry in archive.infolist():
                 path = PurePosixPath(entry.filename)
                 windows_path = PureWindowsPath(entry.filename)
@@ -52,4 +52,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    prepare()

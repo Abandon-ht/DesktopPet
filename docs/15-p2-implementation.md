@@ -54,7 +54,7 @@
 
 本地原始模型确有 13 个 `exp3.json` 表情；`HandChange.exp3.json` 修改 `Param17`（模型 cdi 名称“右手手前”），所以手臂前后姿态变化的记忆有依据。原始 `model3.json` 没有 Motion 组，手臂变化是表情参数的淡入／淡出，并非独立的连续动作文件。旧 P1 包只登记摸头 `Happy1`、身体点击 `Shy`，不会在主动招呼时调用 `HandChange`；P2 包已把 `HandChange` 配为 `greet`。其余未映射的表情文件仍存在于本地包中，但当前界面没有逐个播放 13 个表情的入口。
 
-为避免与旧包混淆，新生成的本地包显示名改为“纳西妲 · P2 表情与手部”。在当前应用的“角色包 manifest.json 的完整路径”输入 `/Users/ncy/Projects/DesktopPet/artifacts/local/p2/nahida-actions-local/manifest.json`，点“导入并切换”，待已导入角色列表显示新名称；不要输入 `.app` 路径或占位示例。角色资源仍只留在 Git 忽略的本地目录。切换后再做表情与手部动作的桌面目视确认。
+为避免与旧包混淆，新生成的本地包显示名改为“纳西妲 · P2 表情与手部”。在当前应用的“角色包 manifest.json 的完整路径”输入 `./artifacts/local/p2/nahida-actions-local/manifest.json`，点“导入并切换”，待已导入角色列表显示新名称；不要输入 `.app` 路径或占位示例。角色资源仍只留在 Git 忽略的本地目录。切换后再做表情与手部动作的桌面目视确认。
 
 P2 总体通过条件仍以 [路线图](05-roadmap.md) 为准。
 
@@ -64,7 +64,7 @@ P2 总体通过条件仍以 [路线图](05-roadmap.md) 为准。
 
 已按 [设计与实施记录](16-p2-expression-design.md) 完成角色包 v2、协议 v3、八类基础状态、分段互动、13 表情预览及按请求 ID 收束的切换提示。旧 v1 包继续使用既有动作回退。相关测试、Clippy、release 构建和本地签名通过；桌面视觉尚待用户确认。
 
-本地测试包：[DesktopPet P2 Expressions.app](../artifacts/local/p2/DesktopPet%20P2%20Expressions.app)。先退出旧测试包，再打开新包；若“当前角色”不是“纳西妲 · 13 表情状态版”，在角色包路径栏导入 `/Users/ncy/Projects/DesktopPet/artifacts/local/p2/nahida-expressions-v2/manifest.json`。切换完成后提示应从“正在尝试切换角色…”变为“已切换到 …”。“表情检查”可逐个预览 13 项，每项 5 秒后自动恢复；`Sad2` 与 `black` 外观一致是原文件同效。随后用已有养成数值与喂食／玩耍／休息、摸头／身体点击及主动陪伴观察自动映射，特别确认右手、草元素、嘴部样式和脸颊变化。低值状态可先通过预览核查视觉，不建议为了测试长期耗尽真实存档。记录任何不自然或缺失的反馈及其当时数值。
+本地测试包：[DesktopPet P2 Expressions.app](../artifacts/local/p2/DesktopPet%20P2%20Expressions.app)。先退出旧测试包，再打开新包；若“当前角色”不是“纳西妲 · 13 表情状态版”，在角色包路径栏导入 `./artifacts/local/p2/nahida-expressions-v2/manifest.json`。切换完成后提示应从“正在尝试切换角色…”变为“已切换到 …”。“表情检查”可逐个预览 13 项，每项 5 秒后自动恢复；`Sad2` 与 `black` 外观一致是原文件同效。随后用已有养成数值与喂食／玩耍／休息、摸头／身体点击及主动陪伴观察自动映射，特别确认右手、草元素、嘴部样式和脸颊变化。低值状态可先通过预览核查视觉，不建议为了测试长期耗尽真实存档。记录任何不自然或缺失的反馈及其当时数值。
 
 ## P2-06：细分点击区域（待桌面校准）
 

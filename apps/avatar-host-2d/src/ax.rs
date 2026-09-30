@@ -61,7 +61,7 @@ impl Probe {
                     || (notified && now.duration_since(last_sample) >= Duration::from_millis(33))
                 {
                     let notification_at = observer.take_notification_time();
-                    let trusted = crate::platform::ax_trusted() == Some(true);
+                    let trusted = crate::platform::external_observation_available();
                     let target = if trusted {
                         focused.sample(std::process::id() as i32)
                     } else {
@@ -130,11 +130,13 @@ impl Probe {
         self.revision.load(Ordering::Acquire)
     }
 
-    pub fn latest(&self) -> Option<Target> {
-        self.latest_with_timing().map(|(target, _, _)| target)
+    pub fn latest(&self, scale: f64) -> Option<Target> {
+        self.latest_with_timing(scale).map(|(target, _, _)| target)
     }
 
-    pub fn latest_with_timing(&self) -> Option<(Target, f64, Option<f64>)> {
+    pub fn latest_with_timing(&self, scale: f64) -> Option<(Target, f64, Option<f64>)> {
+        #[cfg(not(target_os = "windows"))]
+        let _ = scale;
         self.latest
             .lock()
             .unwrap()
@@ -142,6 +144,16 @@ impl Probe {
             .filter(|observation| observation.at.elapsed() <= Duration::from_millis(750))
             .and_then(|observation| {
                 observation.target.map(|target| {
+                    #[cfg(target_os = "windows")]
+                    let target = Target {
+                        bounds: crate::snap::Rect {
+                            x: target.bounds.x / scale,
+                            y: target.bounds.y / scale,
+                            width: target.bounds.width / scale,
+                            height: target.bounds.height / scale,
+                        },
+                        ..target
+                    };
                     (
                         target,
                         observation.at.elapsed().as_secs_f64() * 1000.0,
@@ -526,7 +538,11 @@ mod native {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+#[path = "ax_windows.rs"]
+mod native;
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod native {
     use super::Target;
     use std::time::Duration;

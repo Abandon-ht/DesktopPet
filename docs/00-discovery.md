@@ -2,7 +2,7 @@
 
 ## 核查范围
 
-2026-09-16 对项目目录、指定角色目录及 `/Users/ncy/Projects/ASR`、`TTS`、`kaldi` 做只读检查；读取模型清单和使用说明，以 Blender 后台模式禁用自动脚本执行后读取现有 Blend。未修改原始模型、安装依赖或运行语音推理。当前仓库检查时没有应用代码。
+2026-09-16 对项目目录、指定角色目录及 `<local-projects>/ASR`、`TTS`、`kaldi` 做只读检查；读取模型清单和使用说明，以 Blender 后台模式禁用自动脚本执行后读取现有 Blend。未修改原始模型、安装依赖或运行语音推理。当前仓库检查时没有应用代码。
 
 ## 开发设备
 
@@ -18,7 +18,7 @@
 
 ## 角色资产
 
-根目录：[GenshinImpact](/Users/ncy/Downloads/GenshinImpact)。表中路径相对此目录。
+根目录：用户本地角色资产目录 `GenshinImpact`。表中路径相对此目录。
 
 | 资源 | 实际格式与检查结果 | 推荐用途 |
 | --- | --- | --- |
@@ -42,12 +42,12 @@
 
 | 路径 | 本轮发现 | 接入判断 |
 | --- | --- | --- |
-| `/Users/ncy/Projects/kaldi/sherpa-onnx` | 本地提交 `bc5157a5`；README 包含 Rust、Tauri、ASR/TTS/KWS/VAD 支持说明 | 第一优先；为各功能单独准备兼容模型 |
-| `/Users/ncy/Projects/kaldi/sherpa-mlx` | 本地提交 `0d2eae7`；README 展示 MLX VAD 流程 | 作为 Apple Silicon 实验候选，不视为完整 SenseVoice/CosyVoice 替代 |
-| `/Users/ncy/Projects/kaldi/sherpa-ncnn` | 目录存在 | CPU 或特定模型候选；不从目录存在推断任意模型受支持 |
-| `/Users/ncy/Projects/ASR/SenseVoiceSmall-onnx` | 本地提交 `fe8f35d`；有 5/10/15/20/25/30 秒命名的模型目录、AX 构建脚本 | 可能是特定设备/输入形状导出；先核查张量签名、tokenizer、前处理、量化，不能直接当作 sherpa 标准包 |
-| `/Users/ncy/Projects/ASR` | 另有 FireRedASR2S、Qwen3-ASR 相关项目 | 后续 ASR 适配与质量对比 |
-| `/Users/ncy/Projects/TTS` | kokoro、Breeze-TTS-2、MOSS-TTS-Nano、Qwen3-TTS、qwentts.cpp、supertonic 等 | 先选 CPU 可达标的 TTS 基线，再比较质量与设备占用 |
+| `<local-projects>/kaldi/sherpa-onnx` | 本地提交 `bc5157a5`；README 包含 Rust、Tauri、ASR/TTS/KWS/VAD 支持说明 | 第一优先；为各功能单独准备兼容模型 |
+| `<local-projects>/kaldi/sherpa-mlx` | 本地提交 `0d2eae7`；README 展示 MLX VAD 流程 | 作为 Apple Silicon 实验候选，不视为完整 SenseVoice/CosyVoice 替代 |
+| `<local-projects>/kaldi/sherpa-ncnn` | 目录存在 | CPU 或特定模型候选；不从目录存在推断任意模型受支持 |
+| `<local-projects>/ASR/SenseVoiceSmall-onnx` | 本地提交 `fe8f35d`；有 5/10/15/20/25/30 秒命名的模型目录、AX 构建脚本 | 可能是特定设备/输入形状导出；先核查张量签名、tokenizer、前处理、量化，不能直接当作 sherpa 标准包 |
+| `<local-projects>/ASR` | 另有 FireRedASR2S、Qwen3-ASR 相关项目 | 后续 ASR 适配与质量对比 |
+| `<local-projects>/TTS` | kokoro、Breeze-TTS-2、MOSS-TTS-Nano、Qwen3-TTS、qwentts.cpp、supertonic 等 | 先选 CPU 可达标的 TTS 基线，再比较质量与设备占用 |
 | LM Studio | 用户说明已安装；未检查服务健康 | P3 接入兼容 HTTP API，启动时发现真实模型 ID |
 
 本轮在指定 TTS 根目录列表中未发现 CosyVoice 独立目录；这不表示机器其他位置没有安装。设计保留 CosyVoice 服务适配器，不假定其环境和权重已准备完成。

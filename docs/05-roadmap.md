@@ -131,6 +131,8 @@ Gate：P3 真实设备验收后，点击语音可进入 macOS 首版；P4b 未�
 
 ## P7：Windows / Linux，10–20 人日起
 
+Windows W1／W2 本地功能已验收（2026-09-30）：资源发现、Win32 输入、屏幕及 WinEvent／DWM 他应用吸附、本地语音均已接入。31 项测试及运行检查通过，用户确认功能正常。进入手动 CI 与 Authenticode 开发签名的便携 ZIP 分发阶段；混合 DPI、其他设备、长期稳定性、受信任签名及安装器仍需专项完成。证据见 [Windows 交接](windows-build-progress.md)，操作见 [Windows CI 与签名](windows-ci-signing.md)。
+
 依赖 P6 的协议与发行流程稳定。按平台单独排期，不承诺一次构建获得全部行为。
 
 当前 Windows 仓库状态、编译探针、构建环境及更细的工作量估算见 [Windows 构建准备](../BUILDING.windows.zh-CN.md)。其中“编译出两个 `.exe`”与“桌宠功能可用、可安装”是不同里程碑；10–20 人日起是本路线图的早期跨平台阶段估算，不代表 Windows 已完成验证。

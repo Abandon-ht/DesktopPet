@@ -1,6 +1,9 @@
 param(
     [string]$TargetDirectory = (Join-Path $env:LOCALAPPDATA 'DesktopPet\target'),
-    [string]$ProxyUrl = ''
+    [string]$ProxyUrl = '',
+    [switch]$RunTests,
+    [switch]$BuildSmokeTools,
+    [switch]$HeadlessTests
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,8 +26,21 @@ Push-Location $taskRepository
 try {
     & rustc +1.95.0-x86_64-pc-windows-msvc -vV
     if ($LASTEXITCODE -ne 0) { throw 'The pinned Rust toolchain is not available.' }
+    if ($RunTests) {
+        $taskTestArguments = @('test', '--locked', '--release', '-p', 'desktop-pet', '-p', 'avatar-host-2d', '-p', 'pet-inference-http')
+        if ($HeadlessTests) {
+            # DWM visible-window validation requires an interactive desktop.
+            $taskTestArguments += @('--', '--skip', 'native_window_bounds_feed_snap_and_hidden_windows_are_rejected')
+        }
+        & cargo +1.95.0-x86_64-pc-windows-msvc @taskTestArguments
+        if ($LASTEXITCODE -ne 0) { throw "Cargo tests failed with exit code $LASTEXITCODE" }
+    }
     & cargo +1.95.0-x86_64-pc-windows-msvc build --locked --release -p desktop-pet -p avatar-host-2d
     if ($LASTEXITCODE -ne 0) { throw "Cargo build failed with exit code $LASTEXITCODE" }
+    if ($BuildSmokeTools) {
+        & cargo +1.95.0-x86_64-pc-windows-msvc build --locked --release -p pet-inference-http --bin lm-studio-smoke -p pet-voice-session --bin voice-smoke
+        if ($LASTEXITCODE -ne 0) { throw "Smoke tool build failed with exit code $LASTEXITCODE" }
+    }
     Get-Item (Join-Path $TargetDirectory 'release\desktop-pet.exe'), (Join-Path $TargetDirectory 'release\avatar-host-2d.exe')
 } finally {
     Pop-Location

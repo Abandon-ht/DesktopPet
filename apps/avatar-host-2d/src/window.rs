@@ -16,6 +16,8 @@ use std::{
 use winit::platform::macos::{
     ActivationPolicy, EventLoopBuilderExtMacOS, WindowAttributesExtMacOS,
 };
+#[cfg(target_os = "windows")]
+use winit::platform::windows::WindowAttributesExtWindows;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -147,6 +149,10 @@ impl AvatarHost {
         let attributes = attributes
             .with_has_shadow(false)
             .with_accepts_first_mouse(true);
+        #[cfg(target_os = "windows")]
+        let attributes = attributes
+            .with_skip_taskbar(true)
+            .with_no_redirection_bitmap(true);
         let window = Arc::new(event_loop.create_window(attributes)?);
         let mut overlay = pollster::block_on(State::new(
             window,
@@ -335,6 +341,10 @@ impl ApplicationHandler<Control> for AvatarHost {
         let attributes = attributes
             .with_has_shadow(false)
             .with_accepts_first_mouse(true);
+        #[cfg(target_os = "windows")]
+        let attributes = attributes
+            .with_skip_taskbar(true)
+            .with_no_redirection_bitmap(true);
         let result = (|| {
             let window = Arc::new(event_loop.create_window(attributes)?);
             pollster::block_on(State::new(
@@ -751,7 +761,7 @@ impl State {
             &fit_matrix(model.runtime(), size.width, size.height),
         );
         let monitors: Vec<_> = window.available_monitors().map(|m| json!({"name": m.name(), "position": [m.position().x, m.position().y], "size": [m.size().width, m.size().height], "scale": m.scale_factor()})).collect();
-        let dynamic_input = cfg!(target_os = "macos");
+        let dynamic_input = cfg!(any(target_os = "macos", target_os = "windows"));
         let passthrough = true;
         window.set_cursor_hittest(!passthrough)?;
         pet_ipc::event_log!(
@@ -803,7 +813,7 @@ impl State {
             next_hit_id: 1,
             pressed: None,
             neutral_bounds: bounds,
-            snap_enabled: cfg!(target_os = "macos"),
+            snap_enabled: cfg!(any(target_os = "macos", target_os = "windows")),
             anchor_ratio,
             perch_ratio,
             backend,
@@ -830,8 +840,14 @@ impl State {
     fn sample_input(&mut self) -> Result<()> {
         if self.dynamic_input {
             let was_dragging = self.input.dragging;
-            let (x, y, down) = crate::platform::pointer(&self.window)
-                .context("global pointer sampling unavailable")?;
+            let Some((x, y, down)) = crate::platform::pointer(&self.window) else {
+                // Lock screens / secure desktops can temporarily deny sampling.
+                self.pointer_near = false;
+                self.input = Default::default();
+                self.pressed = None;
+                self.window.set_cursor_hittest(false)?;
+                return Ok(());
+            };
             let size = self
                 .window
                 .inner_size()
@@ -895,13 +911,13 @@ impl State {
             if self.snap_enabled && was_dragging && !self.input.dragging {
                 let mut attached = false;
                 if self.external_enabled
-                    && let Some(target) = self.ax_probe.latest()
+                    && let Some(target) = self.ax_probe.latest(self.window.scale_factor())
                     && let Ok((window, _, _)) = crate::platform::desktop(&self.window)
                     && let Some(destination) = self.external_snap.release(
                         window,
                         self.anchor_ratio,
                         self.perch_ratio,
-                        crate::platform::ax_trusted() == Some(true),
+                        crate::platform::external_observation_available(),
                         std::process::id() as i32,
                         &[target],
                     )
@@ -1334,8 +1350,11 @@ impl State {
     }
     fn set_external_enabled(&mut self, enabled: bool) -> Result<()> {
         if enabled {
-            if crate::platform::ax_trusted() != Some(true) {
+            if !crate::platform::external_observation_available() {
                 crate::platform::request_ax_trust();
+                if !cfg!(target_os = "macos") {
+                    bail!("当前平台尚未接入他应用窗口观察");
+                }
                 bail!(
                     "请在 macOS 系统隐私设置中允许当前 DesktopPet 测试包及角色宿主，然后重新开启此开关"
                 );
@@ -1360,11 +1379,11 @@ impl State {
         if !self.external_snap.attached() || self.input.dragging || !self.visible {
             return;
         }
-        let trusted = crate::platform::ax_trusted() == Some(true);
+        let trusted = crate::platform::external_observation_available();
         let current = crate::platform::desktop(&self.window)
             .ok()
             .map(|result| result.0);
-        let observation = self.ax_probe.latest_with_timing();
+        let observation = self.ax_probe.latest_with_timing(self.window.scale_factor());
         let destination = current.and_then(|window| {
             self.external_snap.follow(
                 window,
@@ -1405,9 +1424,8 @@ impl State {
     }
     fn set_visible(&mut self, visible: bool) -> Result<()> {
         if !visible {
-            let was_attached = self.external_snap.attached();
             self.detach_external();
-            if was_attached {
+            if self.visible {
                 self.remember_placement();
             }
         }

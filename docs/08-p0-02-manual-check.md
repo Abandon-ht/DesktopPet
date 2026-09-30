@@ -7,10 +7,10 @@
 在终端运行现有 release 试件，约 153 秒自动退出，每 51 秒循环一轮，共三轮：
 
 ```sh
-cd /Users/ncy/Projects/DesktopPet
+cd .
 env -u P0_CAPTURE_DIR -u P0_PASSTHROUGH -u P0_SNAP P0_INPUT=dynamic \
   target/release/p0-probe window \
-  "/Users/ncy/Downloads/GenshinImpact/Nahida_1080/Nahida_1080.model3.json" 153 \
+  "<local-assets>/GenshinImpact/Nahida_1080/Nahida_1080.model3.json" 153 \
   2>&1 | tee artifacts/local/p0/p0-02-visual-manual.log
 ```
 

@@ -1,4 +1,9 @@
 /// Read trust status only: never requests permission or changes system settings.
+pub fn external_observation_available() -> bool {
+    cfg!(target_os = "windows") || ax_trusted() == Some(true)
+}
+
+/// macOS permission status; Windows uses WinEvent without an AX grant.
 #[cfg(target_os = "macos")]
 pub fn ax_trusted() -> Option<bool> {
     #[link(name = "ApplicationServices", kind = "framework")]
@@ -100,7 +105,7 @@ pub fn snap_floor(window: &winit::window::Window, anchor_ratio: f64) -> anyhow::
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn snap_floor(_: &winit::window::Window, _: f64) -> anyhow::Result<()> {
     anyhow::bail!("screen snap is currently implemented only for macOS")
 }
@@ -127,7 +132,7 @@ pub fn pointer(window: &winit::window::Window) -> Option<(f64, f64, bool)> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn pointer(_: &winit::window::Window) -> Option<(f64, f64, bool)> {
     None
 }
@@ -217,13 +222,19 @@ pub fn move_to(window: &winit::window::Window, target: crate::snap::Rect) -> any
     }
     Ok(())
 }
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn desktop(
     _: &winit::window::Window,
 ) -> anyhow::Result<(crate::snap::Rect, Vec<crate::placement::Screen>, String)> {
     anyhow::bail!("desktop placement requires macOS")
 }
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn move_to(_: &winit::window::Window, _: crate::snap::Rect) -> anyhow::Result<()> {
     anyhow::bail!("desktop placement requires macOS")
 }
+
+#[cfg(target_os = "windows")]
+#[path = "platform_windows.rs"]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::{desktop, move_to, pointer, snap_floor};

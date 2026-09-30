@@ -54,6 +54,10 @@ macOS 通过 Accessibility 查询目标窗口并用 AXObserver 订阅位置、�
 
 Windows 路线采用 WinEvent 通知与窗口几何读取；DWM 可见边框和 DPI-aware 坐标需统一。必须过滤自身、不可见、最小化、cloaked 和不合适的系统窗口，并验证高权限窗口限制。[SetWinEventHook](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwineventhook)、[DwmGetWindowAttribute](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmgetwindowattribute)
 
+Windows W1 已实现基础适配（2026-09-30）：使用 [GetCursorPos](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getcursorpos)／[ScreenToClient](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-screentoclient) 采样窗口外鼠标；使用 [GetMonitorInfoW](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmonitorinfow) 的工作区及 [SetWindowPos](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos) 的不激活标志进行屏幕定位。每次快照将全部屏幕物理坐标除以当前宠物窗口的同一缩放因子，移动时反向换算；保存的仍是显示器标识及归一化位置。单屏 200% 的图形初始化／生命周期检查通过，用户反馈大部分基础功能正常，混合 DPI、多屏等仍待专项验收。
+
+Windows W2 已接入前台窗口、DWM 可见边框和 WinEvent 观察器，拖拽角色获得焦点时保留外部候选，过滤主／子程序自身、隐藏、最小化、cloaked 及工具窗口。物理几何在读取边界按当前宠物缩放换算。实际 HWND 几何及吸附策略测试通过，用户确认本机功能正常；混合 DPI 和高权限窗口仍需专项验证。[W2 回归清单](windows-stage2-manual-check.md)。
+
 ## 主动交互与“占据显示屏”
 
 默认实现为短时视觉表演：角色放大、靠近屏幕中央、伸手、探头、抛出虚拟食物或邀请休息。无需截图、理解屏幕内容或模拟键鼠。屏幕视觉理解可以在未来作为独立可选能力添加。

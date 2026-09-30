@@ -17,6 +17,9 @@ serde_json.workspace = true
 serde.workspace = true
 pollster.workspace = true
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Accessibility", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "=0.2.2", features = ["NSWindow", "NSView", "NSGraphics", "NSEvent", "NSScreen"] }
 objc2-foundation = "=0.2.2"

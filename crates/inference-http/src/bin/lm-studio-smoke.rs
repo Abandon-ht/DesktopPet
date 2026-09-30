@@ -10,7 +10,9 @@ async fn main() -> Result<()> {
         .nth(2)
         .context("usage: lm-studio-smoke URL MODEL_ID [PROMPT]")?;
     let prompt = std::env::args().nth(3);
-    let backend = LmStudioBackend::new(LmStudioConfig::new(endpoint, model))?;
+    let mut config = LmStudioConfig::new(endpoint, model);
+    config.disable_thinking = std::env::args().any(|arg| arg == "--no-thinking");
+    let backend = LmStudioBackend::new(config)?;
     backend.probe().await?;
     println!("Model listed: {}", backend.model_id());
     if let Some(prompt) = prompt {

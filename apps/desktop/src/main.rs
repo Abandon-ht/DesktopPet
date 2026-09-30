@@ -1,3 +1,4 @@
+mod app_layout;
 mod library;
 mod resource_paths;
 mod voice;
@@ -439,10 +440,12 @@ fn persist_voice_settings(
     shared: &Shared,
     app: &tauri::AppHandle,
 ) -> Result<(), String> {
-    let resources = app
-        .path()
-        .resource_dir()
-        .map_err(|error| error.to_string())?;
+    let resources = shared
+        .resources
+        .get()
+        .cloned()
+        .map(Ok)
+        .unwrap_or_else(|| app.path().resource_dir().map_err(|error| error.to_string()))?;
     let stored = resource_paths::for_storage(settings, &resources);
     let serialized = serde_json::to_string(&stored).map_err(|error| error.to_string())?;
     let mut care = shared
@@ -530,6 +533,7 @@ async fn agent_query(
         return Err("请先在联网查询卡片中启用联网".into());
     }
     let mut config = LmStudioConfig::new(&settings.lm_studio_url, &settings.lm_studio_model);
+    config.disable_thinking = settings.llm_backend == pet_voice_session::LlmBackend::Ollama;
     config.api_key = Some(settings.llm_api_key);
     let model = LmStudioBackend::new(config).map_err(|error| error.to_string())?;
     let web = WebRetriever::new(settings.search_provider, load_brave_key())
@@ -1009,15 +1013,21 @@ fn monitor(
         shared.report("connecting", "正在连接角色…", None);
         let result = (|| -> Result<()> {
             let selected_model = model.as_ref().context(
-                "未配置角色。请设置 DESKTOPPET_MODEL 为本地 model3.json 路径后重新启动应用。",
+                "未配置角色。请在设置中导入角色包，或设置 DESKTOPPET_MODEL 为 manifest.json / model3.json 后重新启动。",
             )?;
             anyhow::ensure!(
                 selected_model.is_file(),
                 "角色文件不存在：{}",
                 selected_model.display()
             );
+            anyhow::ensure!(
+                executable.is_file(),
+                "角色宿主不存在：{}",
+                executable.display()
+            );
             let mut command = Command::new(&executable);
             command.arg(selected_model);
+            command.env("DESKTOPPET_PARENT_PID", std::process::id().to_string());
             if let Some(directory) = shared.library.lock().unwrap().as_ref() {
                 command.env("DESKTOPPET_LAYOUT", directory.join("placement.json"));
             }
@@ -1106,6 +1116,7 @@ fn monitor(
                         let candidate = (|| -> Result<(Host, Option<TouchBinding>)> {
                             let mut command = Command::new(&executable);
                             command.arg(&path);
+                            command.env("DESKTOPPET_PARENT_PID", std::process::id().to_string());
                             if let Some(directory) = shared.library.lock().unwrap().as_ref() {
                                 command.env("DESKTOPPET_LAYOUT", directory.join("placement.json"));
                             }
@@ -1405,34 +1416,14 @@ fn monitor(
     }
 }
 fn run() -> Result<()> {
-    let macos = std::env::current_exe()?
-        .parent()
-        .context("missing executable directory")?
-        .to_path_buf();
-    let contents = macos.parent().context("missing app contents directory")?;
-    let bundled_host =
-        contents.join("Helpers/DesktopPet Avatar Host.app/Contents/MacOS/avatar-host-2d");
-    let executable = if bundled_host.is_file() {
-        bundled_host
-    } else {
-        macos.join("avatar-host-2d")
-    };
-    let model = match std::env::var_os("DESKTOPPET_MODEL") {
-        Some(path) => Some(PathBuf::from(path)),
-        None => {
-            let config = contents.join("Resources/model-path.txt");
-            if config.is_file() {
-                let configured = PathBuf::from(std::fs::read_to_string(config)?.trim());
-                Some(if configured.is_absolute() {
-                    configured
-                } else {
-                    contents.join("Resources").join(configured)
-                })
-            } else {
-                None
-            }
-        }
-    };
+    let layout = app_layout::Layout::discover()?;
+    let model = layout.model()?;
+    let executable = layout.host;
+    let resource_dir = layout.resources;
+    pet_ipc::event_log!(
+        "{}",
+        serde_json::json!({"event":"app_layout", "host":executable,"resources":resource_dir,"model":model})
+    );
     let (wake_tx, wake_rx) = mpsc::sync_channel(1);
     let (care_tx, care_rx) = mpsc::sync_channel(32);
     let shared = Arc::new(Shared {
@@ -1539,7 +1530,6 @@ fn run() -> Result<()> {
             }
         })
         .setup(move |app| {
-            let resource_dir = app.path().resource_dir()?;
             let _ = setup_shared.resources.set(resource_dir.clone());
             let dev_data_dir = resource_dir.join("dev-data-dir.txt");
             let directory = if dev_data_dir.is_file() {
@@ -1700,11 +1690,7 @@ fn run() -> Result<()> {
                     }
                 })
                 .build(app)?;
-            if app
-                .path()
-                .resource_dir()?
-                .join("show-settings-on-launch")
-                .is_file()
+            if (model.is_none() || resource_dir.join("show-settings-on-launch").is_file())
                 && let Some(window) = app.get_webview_window("main")
             {
                 window.show()?;

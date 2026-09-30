@@ -11,7 +11,7 @@
 先退出旧 P0/P1 试件。在你用于测试的桌面（建议 Desktop 2）运行：
 
 ```sh
-cd /Users/ncy/Projects/DesktopPet
+cd .
 open "artifacts/local/p1/DesktopPet Dev.app"
 ```
 

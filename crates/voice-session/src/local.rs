@@ -127,6 +127,7 @@ pub fn local_pipeline_with_memory(
 
     let mut lm_config = LmStudioConfig::new(&settings.lm_studio_url, &settings.lm_studio_model);
     lm_config.api_key = Some(settings.llm_api_key.clone());
+    lm_config.disable_thinking = settings.llm_backend == LlmBackend::Ollama;
     let lm = LmStudioBackend::new(lm_config.clone())?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
