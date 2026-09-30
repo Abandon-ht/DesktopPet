@@ -2,6 +2,8 @@
 
 当前仓库**尚未提供可用的 Windows 版本**。现有 GitHub Actions 只在 macOS 构建 `.app`／DMG；Windows 没有安装包、发布工作流或实机验收记录。下面的命令仅用于在 Windows 上尝试编译两个程序，成功生成 `.exe` 不代表桌宠功能已可用。macOS 的现行构建步骤见 [macOS 构建说明](BUILDING.zh-CN.md)。
 
+`windows` 分支已完成首次 Windows x64 Release 编译。环境、图标修复、资源准备和“未配置角色”的启动反馈见 [Windows 编译与开发交接](docs/windows-build-progress.md)；桌宠运行验收仍未完成。
+
 ## 先确定目标与环境
 
 首轮建议以 Windows 10/11 x64、CPU 语音和可分发演示角色为基线。至少准备一台可交互的 Windows 实机或虚拟机；透明合成、点击穿透、焦点、混合 DPI、多显示器和音频设备仍需在目标硬件上验证。虚拟机的图形结果不能单独作为最终验收。
