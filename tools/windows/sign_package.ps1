@@ -8,8 +8,8 @@ $ErrorActionPreference = 'Stop'
 foreach ($taskName in @('WINDOWS_SIGNING_CERT_PFX', 'WINDOWS_SIGNING_CERT_PASSWORD', 'WINDOWS_SIGNING_CERT_THUMBPRINT')) {
     if (-not [Environment]::GetEnvironmentVariable($taskName)) { throw "Missing signing secret: $taskName" }
 }
-if ($TrustSelfSignedForVerification -and $env:GITHUB_ACTIONS -ne 'true') {
-    throw 'Temporary certificate trust is allowed only on the disposable GitHub Actions runner.'
+if ($TrustSelfSignedForVerification -and ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted')) {
+    throw 'Temporary certificate trust is allowed only on a disposable GitHub-hosted Actions runner.'
 }
 $taskPackage = (Resolve-Path -LiteralPath $PackageDirectory).Path
 $taskFiles = @('desktop-pet.exe', 'avatar-host-2d.exe') | ForEach-Object {
@@ -32,6 +32,7 @@ $taskCertificate = $null
 $taskImportedRoot = $false
 $taskImportedPersonal = $false
 try {
+    Write-Host 'Importing the signing certificate into the runner personal store.'
     [System.IO.File]::WriteAllBytes($taskPfx, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERT_PFX))
     $taskPassword = ConvertTo-SecureString $env:WINDOWS_SIGNING_CERT_PASSWORD -AsPlainText -Force
     $taskImportedPersonal = -not (Test-Path -LiteralPath ("Cert:\CurrentUser\My\" + $taskExpected))
@@ -40,11 +41,14 @@ try {
         throw 'The PFX must contain the expected signing certificate and private key.'
     }
     if ($TrustSelfSignedForVerification -and $taskCertificate.Subject -eq $taskCertificate.Issuer) {
-        $taskRoot = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'CurrentUser')
+        # CurrentUser Root can show a confirmation dialog that blocks headless CI.
+        # Hosted Windows runners are administrators and are discarded after the job.
+        $taskRoot = [System.Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine')
         $taskRoot.Open('ReadWrite')
         try {
             if (-not ($taskRoot.Certificates | Where-Object Thumbprint -EQ $taskExpected)) {
                 # Public certificate only; never copy the private key to Root.
+                Write-Host 'Temporarily trusting the public certificate on the disposable hosted runner.'
                 $taskPublicCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($taskCertificate.RawData)
                 try { $taskRoot.Add($taskPublicCertificate) } finally { $taskPublicCertificate.Dispose() }
                 $taskImportedRoot = $true
@@ -52,8 +56,10 @@ try {
         } finally { $taskRoot.Close() }
     }
     foreach ($taskFile in $taskFiles) {
+        Write-Host "Signing and timestamping $(Split-Path -Leaf $taskFile)."
         & $taskSignTool sign /sha1 $taskExpected /s My /fd SHA256 /tr $TimestampUrl /td SHA256 $taskFile
         if ($LASTEXITCODE -ne 0) { throw "Authenticode signing failed: $taskFile" }
+        Write-Host "Verifying $(Split-Path -Leaf $taskFile)."
         & $taskSignTool verify /pa $taskFile
         if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed: $taskFile" }
         $taskSignature = Get-AuthenticodeSignature -LiteralPath $taskFile
@@ -65,6 +71,6 @@ try {
     Write-Host 'Both executables signed, timestamped and verified.'
 } finally {
     Remove-Item -LiteralPath $taskPfx -Force -ErrorAction SilentlyContinue
-    if ($taskImportedRoot) { Remove-Item -LiteralPath ("Cert:\CurrentUser\Root\" + $taskExpected) -Force }
+    if ($taskImportedRoot) { Remove-Item -LiteralPath ("Cert:\LocalMachine\Root\" + $taskExpected) -Force }
     if ($taskImportedPersonal -and $taskCertificate) { Remove-Item -LiteralPath ("Cert:\CurrentUser\My\" + $taskCertificate.Thumbprint) -Force }
 }

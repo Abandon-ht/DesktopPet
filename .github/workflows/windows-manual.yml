@@ -73,6 +73,7 @@ jobs:
           python tools/windows/package_local.py --binaries-dir target/release --output artifacts/local/release/DesktopPet --with-voice
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Sign and verify both executables
+        timeout-minutes: 10
         env:
           WINDOWS_SIGNING_CERT_PFX: ${{ secrets.WINDOWS_SIGNING_CERT_PFX }}
           WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}

@@ -24,7 +24,7 @@ gh workflow run windows-manual.yml --ref windows -f source_ref=windows -f resour
 
 当前采用自签名开发证书，公共 `.cer` 随包提供。它可标识签名身份、验证文件完整性，但不会自动获得 Windows／SmartScreen 信任，也不等于 Microsoft 认证。用户无需为了运行测试包安装根证书。[Microsoft SignTool 说明](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool)
 
-CI 可暂时把公共证书加入该次临时 runner 的当前用户 Root store，用于验证自签名证书，结束后移除；此选项仅在 GitHub Actions 环境允许，不能用来改变用户设备的信任设置。未来换用受信任代码签名证书时更新 Secrets；正式发行仍需针对干净机器验证。
+CI 可暂时把公共证书加入该次临时 runner 的 LocalMachine Root store，用于验证自签名证书，结束后移除。CurrentUser Root store 可能弹出确认窗口，不适用于无交互 CI。此选项仅在一次性的 GitHub 托管 Actions runner 允许，不能用于自托管 runner 或用户设备；私钥仍只导入当前用户 My store。签名步骤有 10 分钟超时并输出各阶段进度。未来换用受信任代码签名证书时更新 Secrets；正式发行仍需针对干净机器验证。
 
 GitHub SSH 密钥用于开发机推送，和 Windows 代码签名证书互不相干。SSH 私钥只保留在开发机，公钥添加到账户 Authentication keys；不放入 Actions 或应用资源。密码、PFX、私钥及其 Base64 文本不进入文档、Git、日志或 ZIP。
 
