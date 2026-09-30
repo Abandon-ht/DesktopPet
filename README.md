@@ -14,6 +14,8 @@ Contributors and users must not use this project to create or distribute sexuali
 
 Windows 分支的基础桌宠、他应用窗口吸附和 Ollama 本地语音已通过本机用户功能验收。可通过 [手动 Windows Actions 与签名流程](docs/windows-ci-signing.md) 构建开发签名的 x64 便携包；自签名证书无默认 Windows 信任，安装器、混合 DPI、其他设备及长期稳定性仍待专项完成。
 
+`windows-nvidia` 从当前 `windows` 基线建立，专门推进 Windows x64 NVIDIA 的 sherpa-onnx CUDA 验证；当前仍是 CPU 实现。运行库、模型变体、质量与性能对照、LLM 共用显存、故障和打包验收见 [Windows NVIDIA CUDA 设计与验证计划](docs/windows-nvidia-cuda-validation.md)。
+
 | 文档 | 内容 |
 | --- | --- |
 | [本地资源与选型依据](docs/00-discovery.md) | 模型、Blender、硬件、语音项目和已核实的限制 |
@@ -21,6 +23,7 @@ Windows 分支的基础桌宠、他应用窗口吸附和 Ollama 本地语音已�
 | [角色与美术资产管线](docs/02-avatar-pipeline.md) | 纳西妲 Live2D 首发；PMX/FBX/Blend 到三维运行时 |
 | [桌面交互与跨平台设计](docs/03-desktop-platform.md) | 点击、穿透、吸附、主动互动、macOS/Windows/Linux 差异 |
 | [语音与硬件加速](docs/04-voice-and-compute.md) | KWS/VAD/ASR/LLM/TTS、打断、设备调度、联网查询与受限 Agent 首版 |
+| [Windows NVIDIA CUDA 验证](docs/windows-nvidia-cuda-validation.md) | windows-nvidia 分支范围、原生依赖、模型与设备设计、N0–N6 验证及通过标准 |
 | [分阶段开发计划](docs/05-roadmap.md) | 任务、依赖、交付物、验收条件、风险和估算 |
 | [架构决策与参考项目](docs/06-decisions-and-references.md) | ADR、开源项目借鉴范围、官方资料 |
 | [P0 实测记录](docs/07-p0-validation.md) | 固定版本构建、纳西妲参数/表情、透明 Surface、短时基线和待测项 |

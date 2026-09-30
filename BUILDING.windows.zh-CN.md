@@ -2,6 +2,8 @@
 
 `windows` 分支的基础桌宠、他应用窗口吸附和 Ollama 本地语音已通过本机自动检查及用户功能验收。新增手动 GitHub Actions 构建带 Authenticode 开发签名的 Windows x64 便携包；正式安装器和跨设备发行验收尚未完成。构建／签名操作见 [Windows CI 与签名](docs/windows-ci-signing.md)，实现与证据见 [Windows 开发交接](docs/windows-build-progress.md)。
 
+`windows-nvidia` 为基于 `windows` 建立的 Windows x64 NVIDIA 专用验证分支。当前构建命令仍产出 CPU 语音版本；CUDA 接入和 GPU 包尚未完成，设计、依赖与分阶段验收见 [CUDA 验证计划](docs/windows-nvidia-cuda-validation.md)。手动 Actions 的 `source_ref` 默认仍为 `windows`，验证此分支时须显式选择 `windows-nvidia`。
+
 ## 先确定目标与环境
 
 首轮建议以 Windows 10/11 x64、CPU 语音和可分发演示角色为基线。至少准备一台可交互的 Windows 实机或虚拟机；透明合成、点击穿透、焦点、混合 DPI、多显示器和音频设备仍需在目标硬件上验证。虚拟机的图形结果不能单独作为最终验收。
