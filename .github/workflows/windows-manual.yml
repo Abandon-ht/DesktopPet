@@ -1,5 +1,5 @@
 name: Build Windows app (manual)
-run-name: Windows x64 signed package · ${{ github.ref_name }}
+run-name: Windows x64 signed installer · ${{ inputs.source_ref }}
 
 on:
   workflow_dispatch:
@@ -26,6 +26,8 @@ jobs:
   windows:
     runs-on: windows-2022
     timeout-minutes: 120
+    outputs:
+      source_commit: ${{ steps.source.outputs.commit }}
     defaults:
       run:
         shell: pwsh
@@ -33,6 +35,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.source_ref }}
+      - name: Record source commit
+        id: source
+        run: |
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "commit=$commit" >> $env:GITHUB_OUTPUT
       - name: Check signing configuration
         env:
           WINDOWS_SIGNING_CERT_PFX: ${{ secrets.WINDOWS_SIGNING_CERT_PFX }}
@@ -45,6 +53,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install pinned NSIS compiler
+        run: |
+          choco install nsis --version=3.12.0 -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Download and verify Microsoft WebView2 bootstrapper
+        run: |
+          New-Item -ItemType Directory -Path artifacts/local/installer-tools -Force | Out-Null
+          $bootstrapper = 'artifacts/local/installer-tools/MicrosoftEdgeWebview2Setup.exe'
+          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $bootstrapper
+          $signature = Get-AuthenticodeSignature $bootstrapper
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation,') {
+            throw 'Microsoft WebView2 bootstrapper signature verification failed'
+          }
       - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.95.0-x86_64-pc-windows-msvc --profile minimal --component rustfmt
@@ -85,12 +106,72 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/windows/archive_package.py --package artifacts/local/release/DesktopPet --output artifacts/local/release/DesktopPet-windows-x64.zip --commit "$commit"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Upload signed portable package
+      - name: Build installer with signed embedded uninstaller
+        timeout-minutes: 15
+        env:
+          WINDOWS_SIGNING_CERT_PFX: ${{ secrets.WINDOWS_SIGNING_CERT_PFX }}
+          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+          WINDOWS_SIGNING_CERT_THUMBPRINT: ${{ secrets.WINDOWS_SIGNING_CERT_THUMBPRINT }}
+        run: |
+          python tools/windows/make_installer.py --package artifacts/local/release/DesktopPet --output artifacts/local/release/DesktopPet-windows-x64-Setup.exe --webview2-bootstrapper artifacts/local/installer-tools/MicrosoftEdgeWebview2Setup.exe --sign
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Sign and verify installer
+        timeout-minutes: 10
+        env:
+          WINDOWS_SIGNING_CERT_PFX: ${{ secrets.WINDOWS_SIGNING_CERT_PFX }}
+          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+          WINDOWS_SIGNING_CERT_THUMBPRINT: ${{ secrets.WINDOWS_SIGNING_CERT_THUMBPRINT }}
+        run: |
+          .\tools\windows\sign_package.ps1 -PackageDirectory artifacts/local/release/DesktopPet -ExecutableFile artifacts/local/release/DesktopPet-windows-x64-Setup.exe -TrustSelfSignedForVerification
+          $setup = Get-Item artifacts/local/release/DesktopPet-windows-x64-Setup.exe
+          $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($setup.Name)" | Set-Content artifacts/local/release/SHA256SUMS.txt -Encoding ascii
+      - name: Upload signed installer
         uses: actions/upload-artifact@v4
         with:
           name: DesktopPet-windows-x64
           path: |
-            artifacts/local/release/DesktopPet-windows-x64.zip
+            artifacts/local/release/DesktopPet-windows-x64-Setup.exe
             artifacts/local/release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
+
+  publish:
+    needs: windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: DesktopPet-windows-x64
+          path: release
+      - name: Publish Windows prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ needs.windows.outputs.source_commit }}
+        run: |
+          tag="windows-v0.1.0-alpha.${GITHUB_RUN_NUMBER}"
+          cat > release-notes.md <<EOF
+          ## Windows x64 安装
+          下载 **DesktopPet-windows-x64-Setup.exe**，双击运行图形安装向导。程序、角色及本地语音资源已合并，无需下载资源 Release 中的多个 ZIP。
+
+          - 安装到当前用户，提供桌面与开始菜单快捷方式。
+          - 开机自启默认关闭，可在安装向导或应用设置里启用。
+          - 正常启动及语音子进程不显示终端窗口。
+          - 缺少 WebView2 时安装向导会联网安装微软运行时。
+          - 升级前从系统托盘退出旧程序；卸载保留用户设置和数据。
+          - 语音对话需要另行配置 Ollama 或兼容的 LLM 服务。
+
+          此 alpha 使用项目自签名代码签名证书。Windows SmartScreen 可能提示未知发布者；签名和 SHA-256 可用于校验来源，不代表微软信誉认证。
+
+          Source commit: ${SOURCE_COMMIT}
+          Build: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          EOF
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release/DesktopPet-windows-x64-Setup.exe release/SHA256SUMS.txt --clobber
+          else
+            gh release create "$tag" release/DesktopPet-windows-x64-Setup.exe release/SHA256SUMS.txt --target "$SOURCE_COMMIT" --prerelease --title "DesktopPet 0.1.0 alpha ${GITHUB_RUN_NUMBER} · Windows x64" --notes-file release-notes.md
+          fi
