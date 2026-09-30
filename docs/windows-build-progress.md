@@ -10,7 +10,8 @@
 - 前台目标窗口、DWM 可见边框和 WinEvent 通知；过滤自身、隐藏、最小化、cloaked、桌面／Shell 与工具窗口。拖动宠物获得焦点时保留此前外部目标；目标失效或前台切换时解除。仅观察几何，不读取窗口内容或移动目标应用。
 - Ollama 兼容流式对话及 `reasoning_effort: none`；同样覆盖工具对话和后台记忆请求。其他 LLM 后端保持原有行为。
 - 资源 ZIP 大小与 SHA-256 核验、安全解包、可移动测试目录和隐藏控制台日志启动脚本。
-- Windows 签名分发脚本：两个 EXE 使用 SHA-256 Authenticode 签名及 RFC 3161 时间戳；校验签名和证书身份后生成 ZIP、公共证书与校验清单。私钥与密码不进入 Git 或产物。
+- Windows 签名分发脚本：程序、宿主、卸载器和最终 Setup.exe 使用 SHA-256 Authenticode 签名及 RFC 3161 时间戳；完成验证后上传安装包和校验清单并发布 prerelease。私钥与密码不进入 Git 或产物。
+- NSIS 单文件图形安装向导，嵌入全部角色和语音资源，安装到当前用户。向导和设置面板均可选择开机自启；正常启动及子进程不显示终端。升级保留自启选择，卸载保留用户数据与额外文件。
 
 ## 验证证据与边界
 
@@ -18,7 +19,9 @@
 
 实际 HWND 的 DWM 几何、吸附策略、移动跟随、隐藏拒绝及解除测试通过。Ollama Qwen3.5 9B 的真实流式中文回复、CPU ZipVoice 合成、CPAL 播放与恢复 idle 通过。固定文本 smoke 绕过麦克风／识别；其后用户确认桌面和语音功能测试正常。
 
-该结论限于已测试的本地环境，不代表混合 DPI、多屏热插拔、高权限窗口、所有音频设备、长期运行及干净机器安装均已专项覆盖。Windows 凭据保存、可选 ncnn 外部程序、正式安装器及受信任 CA 代码签名仍为后续任务。
+安装器变更另通过 31 项不依赖可见窗口的 Rust 测试（宿主 25、主程序 3、HTTP 推理 3）及 4 项打包／安装测试，包含真实安装、升级、自启开关及卸载、中文和空格路径、额外用户文件保留。
+
+该结论限于已测试的本地环境，不代表混合 DPI、多屏热插拔、高权限窗口、所有音频设备、长期运行及干净机器安装均已专项覆盖。Windows 凭据保存、可选 ncnn 外部程序及受信任 CA 代码签名仍为后续任务。
 
 ## 本地重建
 
@@ -36,6 +39,6 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\artifacts\local\window
 
 入口为 `.github/workflows/windows-manual.yml`，仅 `workflow_dispatch`；可选择触发分支及 `source_ref`，默认构建 `windows`。默认分支只登记工作流入口，Windows 实现留在独立分支。
 
-流程使用 Windows Server 2022 runner，下载所选资源 Release、检查格式、执行不依赖交互桌面的 30 项测试、构建、校验资源并打包、签名和验证、上传 `DesktopPet-windows-x64.zip` 与 `SHA256SUMS.txt`。原生可见 HWND 的一项测试已在本机通过，在无交互桌面的 CI 中明确跳过；图形、真实音频和桌面输入不在 runner 上验收。
+流程使用 Windows Server 2022 runner，下载所选资源 Release、检查格式、执行 31 项不依赖交互桌面的 Rust 测试及打包／真实安装测试，构建、校验资源、签名程序、生成带签名卸载器的 NSIS 安装包，签名并上传 `DesktopPet-windows-x64-Setup.exe` 与 `SHA256SUMS.txt`，再由独立任务发布 Windows prerelease。原生可见 HWND 的一项测试已在本机通过，在无交互桌面的 CI 中明确跳过；图形、真实音频和桌面输入不在 runner 上验收。
 
 签名 Secrets、证书信任边界和操作见 [Windows CI 与签名](windows-ci-signing.md)。测试步骤见 [W1](windows-stage1-manual-check.md) 与 [W2](windows-stage2-manual-check.md)。发布包不包含 QA 标记、用户语音配置、SQLite、私钥或 PFX。

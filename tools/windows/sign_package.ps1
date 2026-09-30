@@ -1,5 +1,6 @@
 param(
     [Parameter(Mandatory = $true)][string]$PackageDirectory,
+    [string]$ExecutableFile,
     [switch]$TrustSelfSignedForVerification,
     [string]$TimestampUrl = 'http://timestamp.digicert.com'
 )
@@ -12,11 +13,13 @@ if ($TrustSelfSignedForVerification -and ($env:GITHUB_ACTIONS -ne 'true' -or $en
     throw 'Temporary certificate trust is allowed only on a disposable GitHub-hosted Actions runner.'
 }
 $taskPackage = (Resolve-Path -LiteralPath $PackageDirectory).Path
-$taskFiles = @('desktop-pet.exe', 'avatar-host-2d.exe') | ForEach-Object {
+$taskFiles = if ($ExecutableFile) {
+    (Resolve-Path -LiteralPath $ExecutableFile).Path
+} else { @('desktop-pet.exe', 'avatar-host-2d.exe') | ForEach-Object {
     $taskFile = Join-Path $taskPackage $_
     if (-not (Test-Path -LiteralPath $taskFile -PathType Leaf)) { throw "Missing executable: $_" }
     $taskFile
-}
+} }
 $taskExpected = $env:WINDOWS_SIGNING_CERT_THUMBPRINT.Trim().ToUpperInvariant()
 if ($taskExpected -notmatch '^[0-9A-F]{40}$') { throw 'Invalid signing certificate thumbprint.' }
 $taskSdkBin = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
@@ -68,7 +71,7 @@ try {
         }
     }
     Export-Certificate -Cert $taskCertificate -FilePath (Join-Path $taskPackage 'DesktopPet-signing.cer') | Out-Null
-    Write-Host 'Both executables signed, timestamped and verified.'
+    Write-Host 'All selected executables signed, timestamped and verified.'
 } finally {
     Remove-Item -LiteralPath $taskPfx -Force -ErrorAction SilentlyContinue
     if ($taskImportedRoot) { Remove-Item -LiteralPath ("Cert:\LocalMachine\Root\" + $taskExpected) -Force }

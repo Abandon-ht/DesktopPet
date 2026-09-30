@@ -421,7 +421,13 @@ impl AsrPort for NcnnSenseVoice {
             sherpa_onnx::write(wav_path, &pcm.samples, 16000),
             "无法写入 ASR 临时 WAV"
         );
-        let mut child = Command::new(&self.executable)
+        let mut command = Command::new(&self.executable);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let mut child = command
             .arg(format!(
                 "--tokens={}",
                 self.model_dir.join("tokens.txt").display()

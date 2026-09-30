@@ -30,6 +30,12 @@ pub struct Host {
 impl Host {
     pub fn start(command: &mut Command, timeout: Duration) -> Result<Self> {
         ensure!(!timeout.is_zero(), "timeout must be positive");
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            // Keep the helper's piped IPC handles without allocating a console.
+            command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

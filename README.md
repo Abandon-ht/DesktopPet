@@ -12,7 +12,7 @@ Contributors and users must not use this project to create or distribute sexuali
 
 建议先使用本地纳西妲 Live2D 资源，采用 **Tauri 2 + Rust 业务核心 + 独立 Mocari 0.3.1/wgpu 渲染进程**。语音先通过 sherpa-onnx 和 LM Studio 建立本地闭环，再引入 CosyVoice 等可替换推理服务。三维角色走独立 GLB/Bevy 适配路径。
 
-Windows 分支的基础桌宠、他应用窗口吸附和 Ollama 本地语音已通过本机用户功能验收。可通过 [手动 Windows Actions 与签名流程](docs/windows-ci-signing.md) 构建开发签名的 x64 便携包；自签名证书无默认 Windows 信任，安装器、混合 DPI、其他设备及长期稳定性仍待专项完成。
+Windows 分支的基础桌宠、他应用窗口吸附和 Ollama 本地语音已通过本机用户功能验收。[手动 Windows Actions 与签名流程](docs/windows-ci-signing.md) 构建并发布开发签名的 x64 Setup.exe，内含角色和语音资源，提供图形安装向导及可选开机自启，正常启动不显示终端。用户可从 [Releases](https://github.com/Abandon-ht/DesktopPet/releases) 下载 Windows 安装包。自签名证书无默认 Windows 信任；混合 DPI、其他设备及长期稳定性仍需专项验收。
 
 | 文档 | 内容 |
 | --- | --- |

@@ -1,6 +1,12 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 mod app_layout;
 mod library;
 mod resource_paths;
+mod startup;
 mod voice;
 use anyhow::{Context, Result};
 use chrono::{Local, Timelike};
@@ -1478,6 +1484,8 @@ fn run() -> Result<()> {
         .manage(shared.clone())
         .invoke_handler(tauri::generate_handler![
             status,
+            startup::startup_status,
+            startup::set_startup_enabled,
             control,
             library::packs,
             library::import_pack,

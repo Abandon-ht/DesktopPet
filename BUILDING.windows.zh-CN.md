@@ -1,6 +1,6 @@
 # Windows 构建与分发
 
-`windows` 分支的基础桌宠、他应用窗口吸附和 Ollama 本地语音已通过本机自动检查及用户功能验收。新增手动 GitHub Actions 构建带 Authenticode 开发签名的 Windows x64 便携包；正式安装器和跨设备发行验收尚未完成。构建／签名操作见 [Windows CI 与签名](docs/windows-ci-signing.md)，实现与证据见 [Windows 开发交接](docs/windows-build-progress.md)。
+`windows` 分支的基础桌宠、他应用窗口吸附和 Ollama 本地语音已通过本机自动检查及用户功能验收。手动 GitHub Actions 构建并发布带 Authenticode 开发签名的 Windows x64 Setup.exe，包含全部资源及图形向导，支持可选开机自启和静默启动。跨设备发行验收仍需另行覆盖。构建／签名操作见 [Windows CI 与签名](docs/windows-ci-signing.md)，实现与证据见 [Windows 开发交接](docs/windows-build-progress.md)。
 
 ## 先确定目标与环境
 
@@ -31,7 +31,7 @@ cargo +1.95.0-x86_64-pc-windows-msvc build --locked --release -p desktop-pet -p 
 | 基础桌宠 | Win32 指针、工作区、移动、位置恢复、点击穿透和屏幕吸附已接入，用户确认本机功能正常。混合 DPI、多屏、休眠和其他设备仍需专项覆盖。 |
 | 可选的他应用吸附 | 前台窗口、DWM 可见边框、WinEvent、过滤及宠物获焦时保留目标已实现，单元测试和用户本机验收通过。混合 DPI／高权限窗口待专项验证。 |
 | 语音与资源 | Ollama Qwen3.5 9B、CPU ZipVoice 和 CPAL 链路检查通过，用户确认本机语音功能正常；其他设备、长期运行及可选后端单独验收。 |
-| 打包与发行 | 可移动布局、资源校验、手动 Actions、两个 EXE 的 Authenticode 开发签名及 ZIP 已接入。自签名证书无默认系统信任；正式安装器、受信任签名与干净机器验收仍未完成。 |
+| 打包与发行 | 可移动布局、资源校验、NSIS 图形安装向导、可选开机自启、静默启动、程序／卸载器／Setup.exe 签名和 Release 自动发布已接入。自签名证书无默认系统信任；受信任 CA 签名与干净机器验收仍未完成。 |
 
 建议按“编译 → 可见角色与输入 → 屏幕吸附和存档 → CPU 语音 → 他应用吸附 → 安装包”的顺序推进。不要将图形渲染使用的 GPU 后端等同于语音推理加速；CUDA、DirectML 等每种组合均须单独验证。
 

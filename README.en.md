@@ -2,7 +2,7 @@
 
 DesktopPet is a macOS-first desktop companion built with Rust, Tauri 2, and a separate Mocari 0.3.1/wgpu Live2D rendering process. The development app supports character-pack import, desktop interactions, care state, localized audio, and optional local speech through sherpa-onnx and a configured LLM service. Windows basic interaction, other-window snapping, and local Ollama voice have passed local user acceptance; three-dimensional characters and Linux remain future work.
 
-The repository includes runnable development code, architecture documents, and validation tools. The macOS workflow builds a DMG; the manual Windows workflow builds an Authenticode development-signed x64 portable ZIP using separately verified resource archives. The self-signed development certificate has no default Windows or SmartScreen trust. See [Windows builds](BUILDING.windows.md), [Windows CI and signing](docs/windows-ci-signing.md), [Linux preparation](BUILDING.linux.md), [macOS builds](BUILDING.md), and [asset provenance](docs/ASSETS.md).
+The repository includes runnable development code, architecture documents, and validation tools. The macOS workflow builds a DMG; the manual Windows workflow publishes an Authenticode development-signed x64 Setup.exe to [Releases](https://github.com/Abandon-ht/DesktopPet/releases). The GUI installer includes verified character and speech resources, offers optional Windows login startup, and starts the app without a terminal. The self-signed development certificate has no default Windows or SmartScreen trust. See [Windows builds](BUILDING.windows.md), [Windows CI and signing](docs/windows-ci-signing.md), [Linux preparation](BUILDING.linux.md), [macOS builds](BUILDING.md), and [asset provenance](docs/ASSETS.md).
 
 ## Architecture
 

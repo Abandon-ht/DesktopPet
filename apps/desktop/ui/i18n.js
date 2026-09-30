@@ -1,6 +1,11 @@
 // UI copy is keyed by its original Chinese text. Record each source text node
 // once so switching languages never translates an already translated string.
 const translations = {
+  '启动设置':['Startup settings','起動設定','시작 설정'],
+  '登录 Windows 时自动启动 DesktopPet':['Start DesktopPet when signing in to Windows','Windows サインイン時に DesktopPet を起動','Windows 로그인 시 DesktopPet 시작'],
+  '静默启动，不显示终端窗口。可随时在这里关闭自启；从托盘菜单退出当前程序。':['Starts without a terminal window. Disable startup here; quit the app from its tray menu.','ターミナルを表示せず起動します。自動起動はここで無効にできます。終了はトレイメニューから行います。','터미널 창 없이 시작합니다. 여기서 자동 시작을 끄고 트레이 메뉴에서 종료할 수 있습니다.'],
+  '已开启开机自启。':['Startup enabled.','自動起動を有効にしました。','자동 시작을 켰습니다.'],
+  '已关闭开机自启。':['Startup disabled.','自動起動を無効にしました。','자동 시작을 껐습니다.'],
   'Windows 可直接开启；macOS 需要系统隐私授权。先点击目标窗口，再拖动角色到其上边缘。':['Enable directly on Windows; macOS requires privacy permission. Click the target window, then drag the pet to its top edge.','Windows では直接有効にできます。macOS はプライバシー権限が必要です。対象ウィンドウをクリックしてから、ペットを上辺へドラッグしてください。','Windows에서 바로 켤 수 있으며 macOS는 개인정보 권한이 필요합니다. 대상 창을 클릭한 후 펫을 위쪽 가장자리로 드래그하세요.'],
   '界面语言':['Interface language','表示言語','화면 언어'],
   'DESKTOPPET · 本地预览':['DESKTOPPET · Local preview','DESKTOPPET · ローカルプレビュー','DESKTOPPET · 로컬 미리보기'],

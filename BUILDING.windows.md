@@ -1,6 +1,6 @@
 # Building and distributing for Windows
 
-The `windows` branch includes the basic companion, other-window snapping, and local Ollama voice, validated by automated checks and local user acceptance. A manual GitHub Actions workflow builds an Authenticode development-signed Windows x64 portable package. An installer and acceptance across devices remain pending. See [Windows CI and signing](docs/windows-ci-signing.md) and the [implementation handoff](docs/windows-build-progress.md).
+The `windows` branch includes the basic companion, other-window snapping, and local Ollama voice, validated by automated checks and local user acceptance. A manual GitHub Actions workflow publishes an Authenticode development-signed Windows x64 Setup.exe with bundled resources, a GUI wizard, optional login startup, and no terminal during normal use. Acceptance across devices remains pending. See [Windows CI and signing](docs/windows-ci-signing.md) and the [implementation handoff](docs/windows-build-progress.md).
 
 ## Target and prerequisites
 
@@ -31,7 +31,7 @@ The outputs are `release\desktop-pet.exe` and `release\avatar-host-2d.exe` insid
 | Basic companion | Win32 pointer, work-area, movement, placement, dynamic input, and screen snapping are implemented. The user confirmed local functionality. Mixed DPI, multiple monitors, sleep, and other devices need separate coverage. |
 | Optional other-window snapping | Foreground discovery, DWM visible bounds, WinEvent, filtering, and retention of the target during pet focus are implemented. Native tests and local user acceptance passed; mixed DPI and elevated windows need separate validation. |
 | Voice and resources | Ollama Qwen3.5 9B, CPU ZipVoice, and CPAL smoke checks passed, followed by local user voice acceptance. Other devices, long sessions, and optional backends need separate validation. |
-| Packaging | Movable layout, verified assets, manual Actions, Authenticode development signing for both EXEs, and a ZIP are implemented. The self-signed certificate has no default system trust; an installer, trusted signing, and clean-machine acceptance remain pending. |
+| Packaging | Movable layout, verified assets, an NSIS GUI installer, optional login startup, quiet application startup, signed application/uninstaller/setup executables, and automatic Release publication are implemented. The self-signed certificate has no default system trust; trusted CA signing and clean-machine acceptance remain pending. |
 
 Proceed through compilation, visible character and input, screen snapping and persistence, CPU speech, other-window snapping, and installer validation. The rendering GPU backend and speech inference acceleration are separate; validate CUDA or DirectML combinations independently.
 

@@ -7,11 +7,8 @@ import zipfile
 from prepare_resources import sha256
 
 
-def archive(package, output, commit):
+def validate_package(package):
     package = package.resolve()
-    output = output.resolve()
-    if output.exists() or package in output.parents:
-        raise ValueError('choose a new output ZIP outside the package')
     required = ('desktop-pet.exe', 'avatar-host-2d.exe', 'DesktopPet-signing.cer',
                 'resources/avatar/manifest.json', 'start-test.ps1')
     for name in required:
@@ -23,13 +20,26 @@ def archive(package, output, commit):
             raise ValueError('local QA configuration must not enter a release: ' + name)
     allowed_root = set(required[:3]) | {'start-test.ps1', 'POLICY.md', 'LICENSE', 'ASSETS.md',
                                        'BUILD-INFO.json', 'README.windows.txt'}
-    files = sorted(file for file in package.rglob('*') if file.is_file())
+    entries = sorted(package.rglob('*'))
+    if any(entry.is_symlink() for entry in entries):
+        raise ValueError('symbolic links must not enter a release')
+    files = [file for file in entries if file.is_file()]
     for file in files:
         relative = file.relative_to(package)
         if file.is_symlink() or (len(relative.parts) == 1 and file.name not in allowed_root):
             raise ValueError('unexpected release file: ' + str(relative))
         if file.suffix.lower() in ('.pfx', '.p12', '.pem', '.key', '.log', '.sqlite', '.sqlite3', '.db') or file.name.upper().startswith('WINDOWS_SIGNING_'):
             raise ValueError('private or runtime file in release: ' + str(relative))
+    return files
+
+
+def archive(package, output, commit):
+    package = package.resolve()
+    output = output.resolve()
+    if output.exists() or package in output.parents:
+        raise ValueError('choose a new output ZIP outside the package')
+    validate_package(package)
+    required = ('desktop-pet.exe', 'avatar-host-2d.exe', 'DesktopPet-signing.cer')
     info = {'commit': commit, 'architecture': 'windows-x64', 'files': {}}
     for name in required[:3]:
         file = package / name
@@ -38,7 +48,9 @@ def archive(package, output, commit):
     (package / 'README.windows.txt').write_text(
         'DesktopPet Windows x64 development package\n\n'
         'Extract the complete folder before running desktop-pet.exe. Keep the host and resources beside it.\n'
-        'Use start-test.ps1 when diagnostic logs are needed; use the tray menu to quit.\n'
+        'Release startup is silent; use the tray menu to quit.\n'
+        'Windows login startup can be enabled or disabled in Startup settings.\n'
+        'Use start-test.ps1 when diagnostic logs are needed.\n'
         'Microphone conversation requires configuring an available LLM service and enabling voice in settings.\n'
         'Ollama and its LLM weights are not included. Speech models run on CPU.\n\n'
         'The executables have Authenticode signatures and timestamps. The public signing certificate is included.\n'

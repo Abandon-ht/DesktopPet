@@ -1,4 +1,20 @@
 const invoke = window.__TAURI__.core.invoke;
+const startupInput = document.querySelector('#startup-enabled');
+invoke('startup_status').then(status => {
+  document.querySelector('#startup-panel').hidden = !status.supported;
+  startupInput.checked = status.enabled;
+}).catch(error => { document.querySelector('#detail').textContent = String(error); });
+startupInput.addEventListener('change', async () => {
+  const enabled = startupInput.checked;
+  startupInput.disabled = true;
+  try {
+    await invoke('set_startup_enabled', {enabled});
+    document.querySelector('#startup-message').textContent = t(enabled ? '已开启开机自启。' : '已关闭开机自启。');
+  } catch (error) {
+    startupInput.checked = !enabled;
+    document.querySelector('#startup-message').textContent = String(error);
+  } finally { startupInput.disabled = false; }
+});
 const languageSelect = document.querySelector('#ui-language');
 languageSelect.addEventListener('change', async () => {
   try {
