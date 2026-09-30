@@ -17,7 +17,7 @@ invoke('ui_language').then(language => {
   applyLanguage(language);
 }).catch(error => { document.querySelector('#detail').textContent = String(error); });
 const voiceMessage = document.querySelector('#voice-message');
-const voicePhases = {idle:'待机', starting:'准备中', listening:'聆听中', recognizing:'识别中', thinking:'生成回复', synthesizing:'合成语音', speaking:'播放中', faulted:'需要处理'};
+const voicePhases = {idle:'待机', starting:'准备中', listening:'聆听中', recognizing:'识别中', thinking:'生成回复', searching:'联网查询中', synthesizing:'合成语音', speaking:'播放中', faulted:'需要处理'};
 const voiceFields = {
   enabled:'voice-enabled', asr_backend:'voice-asr-backend', llm_backend:'voice-llm-backend', tts_backend:'voice-tts-backend',
   model_dir:'voice-model-dir', asr_model_path:'voice-asr-model-path', asr_threads:'voice-asr-threads', asr_gpu:'voice-asr-gpu',
@@ -27,7 +27,7 @@ const voiceFields = {
   vad_model_path:'voice-vad-model-path', vad_threshold:'voice-vad-threshold', vad_silence_ms:'voice-vad-silence', no_speech_timeout_secs:'voice-no-speech-timeout', rest_after_inactive_minutes:'voice-rest-inactive',
   aec_enabled:'voice-aec-enabled', kws_enabled:'voice-kws-enabled', kws_model_dir:'voice-kws-model-dir', kws_keyword:'voice-kws-keyword', kws_keyword_en:'voice-kws-keyword-en', kws_keywords_file:'voice-kws-keywords-file', kws_threshold:'voice-kws-threshold', kws_threads:'voice-kws-threads',
   wake_greeting_enabled:'voice-wake-greeting', timed_greetings_enabled:'voice-timed-greetings', first_greeting_enabled:'voice-first-greeting', greeting_dir:'voice-greeting-dir', birthday:'voice-birthday',
-  reference_audio:'voice-reference-audio', reference_text:'voice-reference-text', lm_studio_url:'voice-lm-url', lm_studio_model:'voice-lm-model', llm_api_key:'voice-llm-api-key', system_prompt:'voice-system-prompt', remember_context:'voice-remember-context', output_volume_percent:'voice-output-volume'
+  reference_audio:'voice-reference-audio', reference_text:'voice-reference-text', lm_studio_url:'voice-lm-url', lm_studio_model:'voice-lm-model', llm_api_key:'voice-llm-api-key', system_prompt:'voice-system-prompt', remember_context:'voice-remember-context', output_volume_percent:'voice-output-volume', web_enabled:'voice-web-enabled', search_provider:'voice-search-provider', weather_city:'voice-weather-city'
 };
 function voiceInput(key) { return document.getElementById(voiceFields[key]); }
 function renderVoiceProviders() {
@@ -80,6 +80,70 @@ voiceInput('kws_enabled').addEventListener('change', () => {
 });
 document.querySelector('#voice-start').addEventListener('click', () => invoke('voice_start').catch(error => voiceMessage.textContent = String(error)));
 document.querySelector('#voice-stop').addEventListener('click', () => invoke('voice_stop').catch(error => voiceMessage.textContent = String(error)));
+const webSettingsStatus = document.querySelector('#web-settings-status');
+let webSaveQueue = Promise.resolve();
+function saveWebSettings() {
+  const values = {
+    webEnabled:voiceInput('web_enabled').checked,
+    searchProvider:voiceInput('search_provider').value,
+    weatherCity:voiceInput('weather_city').value.trim()
+  };
+  webSaveQueue = webSaveQueue.catch(() => {}).then(async () => {
+    await invoke('set_web_settings', values);
+    webSettingsStatus.textContent = t('联网设置已自动保存');
+  });
+  return webSaveQueue.catch(error => { webSettingsStatus.textContent = String(error); throw error; });
+}
+for (const key of ['web_enabled','search_provider','weather_city']) {
+  voiceInput(key).addEventListener('change', () => { saveWebSettings().catch(() => {}); });
+}
+async function refreshBraveKeyStatus() {
+  try { document.querySelector('#brave-key-status').textContent = t(await invoke('brave_key_status') ? '密钥已保存在钥匙串' : '未保存密钥'); }
+  catch (error) { document.querySelector('#brave-key-status').textContent = String(error); }
+}
+document.querySelector('#brave-key-save').addEventListener('click', async () => {
+  const input = document.querySelector('#brave-key');
+  try { await invoke('brave_key_save', {key:input.value.trim()}); input.value = ''; await refreshBraveKeyStatus(); }
+  catch (error) { document.querySelector('#brave-key-status').textContent = String(error); }
+});
+document.querySelector('#brave-key-clear').addEventListener('click', async () => {
+  try { await invoke('brave_key_clear'); await refreshBraveKeyStatus(); }
+  catch (error) { document.querySelector('#brave-key-status').textContent = String(error); }
+});
+refreshBraveKeyStatus();
+function showWebSources(container, sources) {
+  container.replaceChildren();
+  for (const source of sources || []) {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'source-link';
+    const checked = source.retrieved_at ? new Date(source.retrieved_at * 1000).toLocaleString() : '';
+    button.textContent = `${source.id} · ${source.title || source.url}${checked ? ` · ${checked}` : ''}`;
+    button.title = source.url;
+    button.addEventListener('click', () => invoke('open_web_source', {url:source.url}).catch(error => document.querySelector('#agent-status').textContent = String(error)));
+    container.append(button);
+  }
+}
+let agentRequest = 0;
+document.querySelector('#agent-query').addEventListener('click', async () => {
+  const question = document.querySelector('#agent-query-input').value.trim();
+  if (!question) { document.querySelector('#agent-status').textContent = t('请输入问题'); return; }
+  const request = ++agentRequest;
+  const status = document.querySelector('#agent-status'); status.textContent = t('正在联网查询…');
+  document.querySelector('#agent-answer').textContent = '';
+  showWebSources(document.querySelector('#agent-sources'), []);
+  try {
+    await saveWebSettings();
+    if (request !== agentRequest) return;
+    const answer = await invoke('agent_query', {question});
+    if (request !== agentRequest) return;
+    document.querySelector('#agent-answer').textContent = answer.answer_text;
+    showWebSources(document.querySelector('#agent-sources'), answer.sources);
+    status.textContent = `${t('查询完成')} · ${answer.sources.length} ${t('个来源')}`;
+  } catch (error) { if (request === agentRequest) status.textContent = String(error); }
+});
+document.querySelector('#agent-cancel').addEventListener('click', async () => {
+  agentRequest++; document.querySelector('#agent-status').textContent = t('查询已停止');
+  try { await invoke('agent_cancel'); } catch (error) { document.querySelector('#agent-status').textContent = String(error); }
+});
 refreshVoiceSettings();
 const memoryEnabled = document.querySelector('#memory-enabled');
 const memoryStatus = document.querySelector('#memory-status');
@@ -192,6 +256,11 @@ async function refreshVoiceStatus() {
     document.querySelector('#voice-state').textContent = `${t('语音')}: ${t(voicePhases[status.phase] || status.phase || '待机')}${status.detail ? ` · ${t(status.detail)}` : ''}`;
     document.querySelector('#voice-transcript').textContent = status.transcript ? `${{'zh-CN':'你说','en-US':'You said','ja-JP':'あなた','ko-KR':'사용자'}[currentLanguage]}: ${status.transcript}` : '';
     document.querySelector('#voice-response').textContent = status.response ? `${{'zh-CN':'回复','en-US':'Reply','ja-JP':'返答','ko-KR':'응답'}[currentLanguage]}: ${status.response}` : '';
+    const sourceKey = JSON.stringify(status.sources || []);
+    if (sourceKey !== refreshVoiceStatus.lastSources) {
+      showWebSources(document.querySelector('#voice-sources'), status.sources);
+      refreshVoiceStatus.lastSources = sourceKey;
+    }
     const kws = status.kws_status || 'off';
     const kwsLabel = kws.startsWith('error:') ? `${t('需要处理')}: ${kws.slice(6)}` :
       kws.startsWith('matched:') ? `${t('已唤醒')}: ${kws.slice(8)}` :

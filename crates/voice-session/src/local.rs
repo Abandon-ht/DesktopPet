@@ -8,8 +8,10 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use crossbeam_queue::ArrayQueue;
+use pet_agent_runtime::Agent;
 use pet_inference_http::{ChatMessage, LmStudioBackend, LmStudioConfig};
 use pet_persistence::MemoryStore;
+use pet_web_retrieval::{Source, WebRetriever, load_brave_key};
 use serde::Deserialize;
 use sherpa_onnx::{
     GenerationConfig, KeywordSpotter, KeywordSpotterConfig, LinearResampler, OfflineRecognizer,
@@ -172,6 +174,11 @@ pub fn local_pipeline_with_memory(
             history: Vec::new(),
             memory,
             memory_jobs,
+            web_enabled: settings.web_enabled,
+            search_provider: settings.search_provider,
+            weather_city: settings.weather_city.clone(),
+            last_sources: Vec::new(),
+            web_history: Vec::new(),
         }),
         tts: Box::new(ZipVoice {
             tts,
@@ -569,6 +576,40 @@ fn create_keyword_spotter(settings: &VoiceSettings) -> Result<KeywordSpotter> {
 mod backend_tests {
     use super::*;
 
+    #[test]
+    #[ignore = "requires Open-Meteo access"]
+    fn voice_dialogue_routes_weather_without_a_search_keyword() {
+        let backend =
+            LmStudioBackend::new(LmStudioConfig::new("http://127.0.0.1:9", "offline")).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let mut dialogue = LmStudioDialogue {
+            backend,
+            runtime,
+            kind: LlmBackend::LmStudio,
+            system_prompt: "简短回答".into(),
+            remember_context: false,
+            previous_response_id: None,
+            history: Vec::new(),
+            memory: None,
+            memory_jobs: None,
+            web_enabled: true,
+            search_provider: pet_web_retrieval::SearchProvider::Wikipedia,
+            weather_city: "上海".into(),
+            last_sources: Vec::new(),
+            web_history: Vec::new(),
+        };
+        let token = TurnToken::new(Arc::new(std::sync::atomic::AtomicU64::new(1)), 1);
+        assert!(dialogue.will_search("今天天气怎么样？"));
+        let answer = dialogue
+            .reply("今天天气怎么样？", &token, &mut |_| {})
+            .unwrap();
+        assert!(answer.contains("上海"));
+        assert_eq!(dialogue.take_sources().len(), 1);
+    }
+
     #[cfg(unix)]
     #[test]
     fn ncnn_adapter_parses_official_json_line() {
@@ -664,11 +705,28 @@ struct LmStudioDialogue {
     history: Vec<ChatMessage>,
     memory: Option<MemoryStore>,
     memory_jobs: Option<SyncSender<MemoryJob>>,
+    web_enabled: bool,
+    search_provider: pet_web_retrieval::SearchProvider,
+    weather_city: String,
+    last_sources: Vec<Source>,
+    web_history: Vec<(String, String)>,
 }
 impl LlmPort for LmStudioDialogue {
     fn reset_session(&mut self) {
         self.previous_response_id = None;
         self.history.clear();
+        self.last_sources.clear();
+        self.web_history.clear();
+    }
+    fn will_search(&self, text: &str) -> bool {
+        self.web_enabled
+            && (pet_agent_runtime::looks_like_web_query(text)
+                || (self.remember_context
+                    && !self.web_history.is_empty()
+                    && pet_agent_runtime::is_followup(text)))
+    }
+    fn take_sources(&mut self) -> Vec<Source> {
+        std::mem::take(&mut self.last_sources)
     }
     fn reply(
         &mut self,
@@ -676,6 +734,7 @@ impl LlmPort for LmStudioDialogue {
         token: &TurnToken,
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<String> {
+        self.last_sources.clear();
         let cancel = async {
             while token.is_current() {
                 tokio::time::sleep(Duration::from_millis(25)).await;
@@ -699,6 +758,31 @@ impl LlmPort for LmStudioDialogue {
             .as_ref()
             .and_then(|store| store.enabled().ok())
             .unwrap_or(false);
+        if self.will_search(text) {
+            let web = WebRetriever::new(self.search_provider, load_brave_key())?;
+            let agent = Agent {
+                model: &self.backend,
+                web: &web,
+                weather_city: &self.weather_city,
+            };
+            let answer = self.runtime.block_on(async {
+                tokio::select! {
+                    result = agent.run_with_context(text, &system, if self.remember_context { &self.web_history } else { &[] }) => result,
+                    _ = cancel => Err(anyhow!("voice turn cancelled")),
+                }
+            })?;
+            token.check()?;
+            self.last_sources = answer.sources;
+            if self.remember_context {
+                self.web_history
+                    .push((text.to_string(), answer.answer_text.clone()));
+                if self.web_history.len() > 3 {
+                    self.web_history.remove(0);
+                }
+            }
+            on_delta(&answer.answer_text);
+            return Ok(answer.answer_text);
+        }
         let answer = if self.kind == LlmBackend::LmStudio && !memory_enabled {
             let previous = self.previous_response_id.clone();
             let reply = self.runtime.block_on(async {

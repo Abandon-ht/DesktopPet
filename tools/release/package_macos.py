@@ -72,6 +72,7 @@ def main():
     parser.add_argument("--require-assets", action="store_true", help="fail unless full character and voice assets exist")
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts/local/release/DesktopPet.app")
     parser.add_argument("--data-dir", type=Path, help="isolated local test data directory; never use for published builds")
+    parser.add_argument("--show-settings-on-launch", action="store_true", help="open settings on launch for desktop QA")
     args = parser.parse_args()
     if args.output.suffix != ".app":
         parser.error("--output must end in .app")
@@ -111,6 +112,8 @@ def main():
     if (resources / "avatar/manifest.json").is_file():
         (resources / "model-path.txt").write_text("avatar/manifest.json\n")
     else:
+        (resources / "show-settings-on-launch").touch()
+    if args.show_settings_on_launch:
         (resources / "show-settings-on-launch").touch()
     if args.data_dir:
         (resources / "dev-data-dir.txt").write_text(str(args.data_dir.resolve()) + "\n")

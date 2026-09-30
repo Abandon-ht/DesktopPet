@@ -15,6 +15,10 @@ pet-persistence = { path = "../../crates/persistence" }
 pet-protocol = { path = "../../crates/pet-protocol" }
 pet-ipc = { path = "../../crates/pet-ipc" }
 pet-voice-session = { path = "../../crates/voice-session" }
+pet-agent-runtime = { path = "../../crates/agent-runtime" }
+pet-web-retrieval = { path = "../../crates/web-retrieval" }
+pet-inference-http = { path = "../../crates/inference-http" }
 tauri = { version = "=2.11.5", default-features = false, features = ["wry", "compression", "tray-icon", "image-png"] }
+tokio = { version = "1", features = ["time"] }
 [build-dependencies]
 tauri-build = "=2.6.3"

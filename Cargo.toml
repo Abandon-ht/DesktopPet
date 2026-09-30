@@ -8,6 +8,8 @@ members = [
     "crates/avatar-pack",
     "crates/persistence",
     "crates/inference-http",
+    "crates/web-retrieval",
+    "crates/agent-runtime",
     "crates/voice-session",
     "tools/p0-probe",
     "tools/p0-ipc-probe",

@@ -10,6 +10,8 @@ anyhow.workspace = true
 cpal = "0.16"
 crossbeam-queue = "0.3"
 pet-inference-http = { path = "../inference-http" }
+pet-agent-runtime = { path = "../agent-runtime" }
+pet-web-retrieval = { path = "../web-retrieval" }
 pet-persistence = { path = "../persistence" }
 serde.workspace = true
 serde_json.workspace = true

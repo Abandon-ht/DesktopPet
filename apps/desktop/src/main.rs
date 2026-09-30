@@ -3,11 +3,13 @@ mod resource_paths;
 mod voice;
 use anyhow::{Context, Result};
 use chrono::{Local, Timelike};
+use pet_agent_runtime::{Agent, AgentAnswer};
 use pet_core::{
     Activity, Effect, Event, Intent, PetCore,
     care::{CareAction, Needs},
     touch::{PastTouch, TouchDecision, TouchHistory, select_touch_response},
 };
+use pet_inference_http::{LmStudioBackend, LmStudioConfig};
 use pet_ipc::supervisor::{Host, RestartBudget};
 use pet_persistence::{
     CareOutcome, CareStore, MemorySnapshot, MemoryStore, StoreError, TouchOutcome,
@@ -17,6 +19,9 @@ use pet_protocol::{
     HitRegion,
 };
 use pet_voice_session::{TtsBackend, VoiceSettings, VoiceStatus};
+use pet_web_retrieval::{
+    SearchProvider, WebRetriever, delete_brave_key, load_brave_key, save_brave_key,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -106,6 +111,7 @@ struct Shared {
     last_hit: Mutex<Option<HitDetail>>,
     last_touch: Mutex<Option<TouchView>>,
     voice: Mutex<Option<voice::VoiceController>>,
+    agent_generation: AtomicU64,
     ui_language: Mutex<voice::UiLanguage>,
     tray_items: Mutex<Option<[MenuItem<tauri::Wry>; 8]>>,
     feed_voice_sequence: AtomicU64,
@@ -417,13 +423,29 @@ fn set_voice_settings(
             settings.reference_audio.display()
         ));
     }
+    persist_voice_settings(&settings, state.inner(), &app)?;
+    state
+        .voice
+        .lock()
+        .unwrap()
+        .as_ref()
+        .ok_or("语音尚未就绪".to_string())?
+        .configure(settings);
+    Ok(())
+}
+
+fn persist_voice_settings(
+    settings: &VoiceSettings,
+    shared: &Shared,
+    app: &tauri::AppHandle,
+) -> Result<(), String> {
     let resources = app
         .path()
         .resource_dir()
         .map_err(|error| error.to_string())?;
-    let stored = resource_paths::for_storage(&settings, &resources);
+    let stored = resource_paths::for_storage(settings, &resources);
     let serialized = serde_json::to_string(&stored).map_err(|error| error.to_string())?;
-    let mut care = state
+    let mut care = shared
         .care
         .lock()
         .map_err(|_| "设置存档不可用".to_string())?;
@@ -432,13 +454,40 @@ fn set_voice_settings(
         .set_setting("voice", &serialized)
         .map_err(|error| error.to_string())?;
     drop(care);
-    state
+    Ok(())
+}
+
+#[tauri::command]
+fn set_web_settings(
+    web_enabled: bool,
+    search_provider: SearchProvider,
+    weather_city: String,
+    state: tauri::State<'_, Arc<Shared>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    if weather_city.chars().count() > 80 {
+        return Err("默认天气城市最多 80 字".into());
+    }
+    let voice = state
         .voice
         .lock()
         .unwrap()
         .as_ref()
-        .ok_or("语音尚未就绪".to_string())?
-        .configure(settings);
+        .cloned()
+        .ok_or("语音尚未就绪")?;
+    let mut settings = voice.settings();
+    let city = weather_city.trim();
+    if settings.web_enabled == web_enabled
+        && settings.search_provider == search_provider
+        && settings.weather_city == city
+    {
+        return Ok(());
+    }
+    settings.web_enabled = web_enabled;
+    settings.search_provider = search_provider;
+    settings.weather_city = city.to_string();
+    persist_voice_settings(&settings, state.inner(), &app)?;
+    voice.configure(settings);
     Ok(())
 }
 #[tauri::command]
@@ -462,6 +511,83 @@ fn voice_stop(state: tauri::State<'_, Arc<Shared>>) {
     if let Some(voice) = state.voice.lock().unwrap().as_ref() {
         voice.stop();
     }
+}
+
+#[tauri::command]
+async fn agent_query(
+    question: String,
+    state: tauri::State<'_, Arc<Shared>>,
+) -> Result<AgentAnswer, String> {
+    let shared = state.inner().clone();
+    let settings = shared
+        .voice
+        .lock()
+        .unwrap()
+        .as_ref()
+        .ok_or("语音设置尚未就绪")?
+        .settings();
+    if !settings.web_enabled {
+        return Err("请先在联网查询卡片中启用联网".into());
+    }
+    let mut config = LmStudioConfig::new(&settings.lm_studio_url, &settings.lm_studio_model);
+    config.api_key = Some(settings.llm_api_key);
+    let model = LmStudioBackend::new(config).map_err(|error| error.to_string())?;
+    let web = WebRetriever::new(settings.search_provider, load_brave_key())
+        .map_err(|error| error.to_string())?;
+    let agent = Agent {
+        model: &model,
+        web: &web,
+        weather_city: &settings.weather_city,
+    };
+    let generation = shared.agent_generation.fetch_add(1, Ordering::AcqRel) + 1;
+    let cancelled = async {
+        while shared.agent_generation.load(Ordering::Acquire) == generation {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    };
+    tokio::select! {
+        answer = agent.run(&question, &settings.system_prompt) => answer.map_err(|error| error.to_string()),
+        _ = cancelled => Err("查询已取消".into()),
+    }
+}
+
+#[tauri::command]
+fn agent_cancel(state: tauri::State<'_, Arc<Shared>>) {
+    state.agent_generation.fetch_add(1, Ordering::AcqRel);
+}
+
+#[tauri::command]
+fn brave_key_status() -> bool {
+    load_brave_key().is_some()
+}
+
+#[tauri::command]
+fn brave_key_save(key: String) -> Result<(), String> {
+    save_brave_key(&key).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn brave_key_clear() -> Result<(), String> {
+    delete_brave_key().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_web_source(url: String) -> Result<(), String> {
+    let parsed = tauri::Url::parse(&url).map_err(|error| error.to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err("来源链接无效".into());
+    }
+    #[cfg(target_os = "macos")]
+    let opener = "open";
+    #[cfg(target_os = "windows")]
+    let opener = "explorer";
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let opener = "xdg-open";
+    Command::new(opener)
+        .arg(url)
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn open_memory(shared: &Shared) -> Result<MemoryStore, String> {
@@ -1329,6 +1455,7 @@ fn run() -> Result<()> {
         last_hit: Mutex::new(None),
         last_touch: Mutex::new(None),
         voice: Mutex::new(None),
+        agent_generation: AtomicU64::new(0),
         ui_language: Mutex::new(voice::UiLanguage::default()),
         tray_items: Mutex::new(None),
         feed_voice_sequence: AtomicU64::new(0),
@@ -1376,11 +1503,18 @@ fn run() -> Result<()> {
             companion_activity,
             voice_settings,
             set_voice_settings,
+            set_web_settings,
             voice_status,
             ui_language,
             set_ui_language,
             voice_start,
             voice_stop,
+            agent_query,
+            agent_cancel,
+            brave_key_status,
+            brave_key_save,
+            brave_key_clear,
+            open_web_source,
             memory_snapshot,
             memory_set_enabled,
             memory_add,
@@ -1632,6 +1766,7 @@ mod tests {
                 last_hit: Mutex::new(None),
                 last_touch: Mutex::new(None),
                 voice: Mutex::new(None),
+                agent_generation: AtomicU64::new(0),
                 ui_language: Mutex::new(voice::UiLanguage::default()),
                 tray_items: Mutex::new(None),
                 feed_voice_sequence: AtomicU64::new(0),

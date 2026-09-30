@@ -83,6 +83,19 @@ pub struct NativeReply {
     pub response_id: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolChatReply {
+    pub text: String,
+    pub calls: Vec<ToolCall>,
+}
+
 impl LmStudioBackend {
     pub fn new(config: LmStudioConfig) -> Result<Self> {
         if config.model_id.trim().is_empty() || config.max_output_tokens == 0 {
@@ -208,11 +221,10 @@ impl LmStudioBackend {
                         .get("delta")
                         .and_then(|d| d.get("content"))
                         .and_then(|c| c.as_str())
+                        && !delta.is_empty()
                     {
-                        if !delta.is_empty() {
-                            answer.push_str(delta);
-                            on_text(delta);
-                        }
+                        answer.push_str(delta);
+                        on_text(delta);
                     }
                 }
             }
@@ -227,6 +239,98 @@ impl LmStudioBackend {
             bail!("LM Studio returned no spoken answer text");
         }
         Ok(answer)
+    }
+
+    /// Complete one bounded tool round. Tool results and assistant calls are
+    /// represented as protocol messages by the caller; this adapter executes none.
+    pub async fn complete_tool_chat(
+        &self,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+        allow_tools: bool,
+    ) -> Result<ToolChatReply> {
+        ensure_tool_messages(messages)?;
+        let url = self.base_url.join("chat/completions")?;
+        let response = self
+            .client
+            .post(url)
+            .json(&serde_json::json!({
+                "model": self.config.model_id,
+                "messages": messages,
+                "tools": tools,
+                "tool_choice": if allow_tools { "auto" } else { "none" },
+                "max_tokens": self.config.max_output_tokens.max(768),
+                "stream": false
+            }))
+            .send()
+            .await
+            .context("工具对话请求失败")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!(
+                "工具对话 HTTP {status}: {}",
+                body.chars().take(300).collect::<String>()
+            );
+        }
+        if response
+            .content_length()
+            .is_some_and(|size| size > 1024 * 1024)
+        {
+            bail!("工具对话响应过大");
+        }
+        let body = response.bytes().await.context("工具对话响应中断")?;
+        if body.len() > 1024 * 1024 {
+            bail!("工具对话响应过大");
+        }
+        let value: serde_json::Value = serde_json::from_slice(&body).context("工具对话响应无效")?;
+        let choice = value
+            .get("choices")
+            .and_then(|items| items.get(0))
+            .context("工具对话缺少模型回复")?;
+        if choice.get("finish_reason").and_then(|value| value.as_str()) == Some("length") {
+            bail!("工具对话达到输出 token 上限");
+        }
+        let message = choice.get("message").context("工具对话缺少消息")?;
+        let text = message
+            .get("content")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
+        let calls = message
+            .get("tool_calls")
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| {
+                        let function = item.get("function").context("工具调用缺少 function")?;
+                        Ok(ToolCall {
+                            id: item
+                                .get("id")
+                                .and_then(|value| value.as_str())
+                                .context("工具调用缺少 id")?
+                                .to_string(),
+                            name: function
+                                .get("name")
+                                .and_then(|value| value.as_str())
+                                .context("工具调用缺少 name")?
+                                .to_string(),
+                            arguments: function
+                                .get("arguments")
+                                .and_then(|value| value.as_str())
+                                .context("工具调用缺少 arguments")?
+                                .to_string(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        if text.trim().is_empty() && calls.is_empty() {
+            bail!("模型没有返回正文或工具调用");
+        }
+        Ok(ToolChatReply { text, calls })
     }
 
     /// LM Studio's native API permits per-request reasoning control. For the
@@ -359,6 +463,19 @@ struct ChatRequest<'a> {
     stream: bool,
 }
 
+fn ensure_tool_messages(messages: &[serde_json::Value]) -> Result<()> {
+    if messages.is_empty() || messages.len() > 20 {
+        bail!("工具对话消息数量无效");
+    }
+    for message in messages {
+        let role = message.get("role").and_then(|role| role.as_str());
+        if !matches!(role, Some("system" | "user" | "assistant" | "tool")) {
+            bail!("工具对话包含未知角色");
+        }
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 struct SseDecoder {
     line: Vec<u8>,
@@ -398,6 +515,7 @@ impl SseDecoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
 
     #[test]
     fn accepts_root_and_v1_urls() {
@@ -414,5 +532,37 @@ mod tests {
         assert!(decoder.push(b"data: {\"choices\":").unwrap().is_empty());
         let events = decoder.push(b"[]}\r\n\r\ndata: [DONE]\n\n").unwrap();
         assert_eq!(events, ["{\"choices\":[]}", "[DONE]"]);
+    }
+
+    #[tokio::test]
+    async fn parses_tool_call_without_speaking_it() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 8192];
+            let size = stream.read(&mut request).unwrap();
+            assert!(String::from_utf8_lossy(&request[..size]).contains("chat/completions"));
+            let body = r#"{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"web_search","arguments":"{\"query\":\"Rust\"}"}}]}}]}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        });
+        let backend = LmStudioBackend::new(LmStudioConfig::new(
+            format!("http://127.0.0.1:{port}"),
+            "test-model",
+        ))
+        .unwrap();
+        let reply = backend
+            .complete_tool_chat(
+                &[serde_json::json!({"role":"user","content":"Rust"})],
+                &[],
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(reply.text.is_empty());
+        assert_eq!(reply.calls.len(), 1);
+        assert_eq!(reply.calls[0].name, "web_search");
+        assert_eq!(reply.calls[0].arguments, r#"{"query":"Rust"}"#);
+        server.join().unwrap();
     }
 }

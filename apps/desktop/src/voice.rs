@@ -381,7 +381,7 @@ fn run(inner: Arc<Inner>, receiver: mpsc::Receiver<()>) {
                 let mut status = inner.status.lock().unwrap();
                 status.phase = "speaking".into();
                 status.detail = format!(
-                    "播放互动语音：{}",
+                    "正在播放开场白或互动语音：{}（此时尚未开始识别提问）",
                     clip.file_stem().unwrap_or_default().to_string_lossy()
                 );
             }

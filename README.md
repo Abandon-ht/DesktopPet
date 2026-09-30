@@ -18,7 +18,7 @@ Contributors and users must not use this project to create or distribute sexuali
 | [总体架构](docs/01-architecture.md) | 进程、Rust 模块、接口、事件、状态、扩展方式 |
 | [角色与美术资产管线](docs/02-avatar-pipeline.md) | 纳西妲 Live2D 首发；PMX/FBX/Blend 到三维运行时 |
 | [桌面交互与跨平台设计](docs/03-desktop-platform.md) | 点击、穿透、吸附、主动互动、macOS/Windows/Linux 差异 |
-| [语音与硬件加速](docs/04-voice-and-compute.md) | KWS/VAD/ASR/LLM/TTS、打断、设备调度、联网查询与受限 Agent 规划 |
+| [语音与硬件加速](docs/04-voice-and-compute.md) | KWS/VAD/ASR/LLM/TTS、打断、设备调度、联网查询与受限 Agent 首版 |
 | [分阶段开发计划](docs/05-roadmap.md) | 任务、依赖、交付物、验收条件、风险和估算 |
 | [架构决策与参考项目](docs/06-decisions-and-references.md) | ADR、开源项目借鉴范围、官方资料 |
 | [P0 实测记录](docs/07-p0-validation.md) | 固定版本构建、纳西妲参数/表情、透明 Surface、短时基线和待测项 |
@@ -33,6 +33,7 @@ Contributors and users must not use this project to create or distribute sexuali
 | [本机语音测试包](docs/21-p3-voice-test-app.md) | 编译应用路径、菜单栏新图标和 ASR/KWS/LLM/TTS 测试步骤 |
 | [多语言互动语音](docs/22-p3-localized-interactions.md) | 生日、喂食、亲密度、主动招呼、多语言音频目录和 KWS 状态 |
 | [长期记忆](docs/23-long-term-memory.md) | 跨会话存储、自动提取与压缩、召回、用户管理和验收边界 |
+| [P3-W 联网查询与受限 Agent](docs/24-p3-web-agent.md) | 搜索服务、只读工具循环、来源展示、测试方式与当前限制 |
 
 关键结论：
 
@@ -53,7 +54,7 @@ P3 本地语音开发版已把角色头部点击和可选中英文关键词唤�
 
 长期记忆首版已接入 SQLite、语音对话和设置面板，默认关闭。开启后保存文字轮次，后台提出待确认事实并每 6 轮生成滚动摘要；确认过的事实可用于跨会话回复。用户可编辑、固定、忘记或清空，真实模型质量与桌面操作待验收。详见[长期记忆设计与实现](docs/23-long-term-memory.md)。
 
-联网查询与受限 Agent 目前**仅完成文档规划，尚未实现**。首版拟由 Rust 执行只读搜索与网页读取工具，由模型提出请求并综合带来源的结果；所用模型的工具调用质量、网络边界、取消和长期记忆隔离都需单独验收。方案见[总体架构](docs/01-architecture.md)、[语音与计算设计](docs/04-voice-and-compute.md)及[路线图 P3-W](docs/05-roadmap.md)。
+联网查询与受限 Agent 已接入首版代码：设置面板可输入问题、选择维基百科或 Brave Search，模型只能请求只读搜索和读取本轮结果页面；回答与来源分开展示。联网默认关闭，卡片内设置自动保存，Brave 密钥保存在 macOS 钥匙串。自然天气提问调用 Open-Meteo 并显示来源；新闻等实时问题可自动进入 Brave 查询路径。维基百科、天气真实查询与模拟模型工具链路已验证；Brave 实际密钥、当前 LM Studio 模型的工具质量和桌面语音仍待验收。详见[P3-W 实现与测试](docs/24-p3-web-agent.md)。
 
 若曾保存原始 `.model3.json` 路径，新版会在启动时优先迁移到开发包内有效的 `manifest.json` 并保留大小设置；已选择角色包的用户保持原选择。旧程序运行期间仍可从“角色与设置…”手动导入新包。
 

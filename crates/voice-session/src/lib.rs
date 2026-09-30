@@ -7,6 +7,7 @@ pub use local::{
 };
 
 use anyhow::{Result, bail};
+use pet_web_retrieval::{SearchProvider, Source};
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
@@ -100,6 +101,9 @@ pub struct VoiceSettings {
     pub tts_threads: u8,
     pub remember_context: bool,
     pub output_volume_percent: u8,
+    pub web_enabled: bool,
+    pub search_provider: SearchProvider,
+    pub weather_city: String,
 }
 
 impl Default for VoiceSettings {
@@ -153,12 +157,18 @@ impl Default for VoiceSettings {
             tts_threads: 8,
             remember_context: true,
             output_volume_percent: 100,
+            web_enabled: false,
+            search_provider: SearchProvider::default(),
+            weather_city: String::new(),
         }
     }
 }
 
 impl VoiceSettings {
     pub fn validate(&self) -> Result<()> {
+        if self.weather_city.chars().count() > 80 {
+            bail!("默认天气城市最多 80 字");
+        }
         if !self.birthday.is_empty() {
             let bytes = self.birthday.as_bytes();
             let valid_shape = bytes.len() == 5
@@ -278,6 +288,7 @@ pub struct VoiceStatus {
     pub transcript: String,
     pub response: String,
     pub detail: String,
+    pub sources: Vec<Source>,
 }
 
 #[derive(Clone, Debug)]
@@ -334,6 +345,12 @@ pub trait AsrPort: Send {
 }
 pub trait LlmPort: Send {
     fn reset_session(&mut self) {}
+    fn will_search(&self, _: &str) -> bool {
+        false
+    }
+    fn take_sources(&mut self) -> Vec<Source> {
+        Vec::new()
+    }
     fn reply(
         &mut self,
         text: &str,
@@ -394,7 +411,12 @@ impl VoicePipeline {
             bail!("未识别到可用语音");
         }
         status.transcript = transcript.clone();
-        status.phase = "thinking".into();
+        status.phase = if self.llm.will_search(&transcript) {
+            "searching"
+        } else {
+            "thinking"
+        }
+        .into();
         report(status.clone());
         let response = self.llm.reply(&transcript, token, &mut |delta| {
             if token.is_current() {
@@ -407,7 +429,13 @@ impl VoicePipeline {
             bail!("LLM 未返回可朗读正文");
         }
         status.response = response.clone();
-        for sentence in spoken_segments(&response, 80) {
+        status.sources = self.llm.take_sources();
+        let speech = if status.sources.is_empty() {
+            response.clone()
+        } else {
+            strip_source_tags(&response)
+        };
+        for sentence in spoken_segments(&speech, 80) {
             token.check()?;
             status.phase = "synthesizing".into();
             report(status.clone());
@@ -432,6 +460,26 @@ impl VoicePipeline {
         report(status);
         Ok(())
     }
+}
+
+fn strip_source_tags(text: &str) -> String {
+    let mut result = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("[S") {
+        result.push_str(&rest[..start]);
+        rest = &rest[start..];
+        if let Some(end) = rest.find(']') {
+            let candidate = &rest[2..end];
+            if !candidate.is_empty() && candidate.chars().all(|ch| ch.is_ascii_digit()) {
+                rest = &rest[end + 1..];
+                continue;
+            }
+        }
+        result.push_str("[S");
+        rest = &rest[2..];
+    }
+    result.push_str(rest);
+    result.trim().to_string()
 }
 
 fn spoken_segments(text: &str, limit: usize) -> Vec<String> {
@@ -484,6 +532,14 @@ mod tests {
             ..VoiceSettings::default()
         };
         assert!(planned.validate().is_ok());
+    }
+
+    #[test]
+    fn speech_omits_source_tags_but_keeps_answer_text() {
+        assert_eq!(
+            strip_source_tags("上海今天有雨。[S1] 请带伞。[S2]"),
+            "上海今天有雨。 请带伞。"
+        );
     }
 
     #[test]

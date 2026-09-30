@@ -1,0 +1,14 @@
+[package]
+name = "pet-agent-runtime"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+pet-inference-http = { path = "../inference-http" }
+pet-web-retrieval = { path = "../web-retrieval" }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["time"] }
