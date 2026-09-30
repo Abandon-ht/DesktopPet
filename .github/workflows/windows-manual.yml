@@ -1,0 +1,95 @@
+name: Build Windows app (manual)
+run-name: Windows x64 signed package · ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Branch, tag or commit to build
+        required: true
+        default: windows
+        type: string
+      resource_tag:
+        description: Release tag containing separately packaged build resources
+        required: true
+        default: resources-2026-09-29
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-manual-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+      - name: Check signing configuration
+        env:
+          WINDOWS_SIGNING_CERT_PFX: ${{ secrets.WINDOWS_SIGNING_CERT_PFX }}
+          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+          WINDOWS_SIGNING_CERT_THUMBPRINT: ${{ secrets.WINDOWS_SIGNING_CERT_THUMBPRINT }}
+        run: |
+          foreach ($name in @('WINDOWS_SIGNING_CERT_PFX', 'WINDOWS_SIGNING_CERT_PASSWORD', 'WINDOWS_SIGNING_CERT_THUMBPRINT')) {
+            if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Missing repository Actions secret: $name" }
+          }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.95.0-x86_64-pc-windows-msvc --profile minimal --component rustfmt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x64-msvc
+          cache-on-failure: true
+      - name: Download selected resource archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESOURCE_TAG: ${{ inputs.resource_tag }}
+        run: |
+          New-Item -ItemType Directory -Path artifacts/local/release-assets -Force | Out-Null
+          gh release download "$env:RESOURCE_TAG" --repo "$env:GITHUB_REPOSITORY" --dir artifacts/local/release-assets --pattern '*.zip' --pattern 'SHA256SUMS.json'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Check package privacy guards
+        run: python -m unittest discover -s tools/windows -p test_*.py
+      - name: Test and compile application and avatar host
+        shell: powershell
+        run: .\tools\windows\build.ps1 -TargetDirectory target -RunTests -HeadlessTests
+      - name: Assemble portable package with verified resources
+        run: |
+          python tools/windows/package_local.py --binaries-dir target/release --output artifacts/local/release/DesktopPet --with-voice
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Sign and verify both executables
+        env:
+          WINDOWS_SIGNING_CERT_PFX: ${{ secrets.WINDOWS_SIGNING_CERT_PFX }}
+          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+          WINDOWS_SIGNING_CERT_THUMBPRINT: ${{ secrets.WINDOWS_SIGNING_CERT_THUMBPRINT }}
+        run: .\tools\windows\sign_package.ps1 -PackageDirectory artifacts/local/release/DesktopPet -TrustSelfSignedForVerification
+      - name: Create ZIP and checksums
+        run: |
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/windows/archive_package.py --package artifacts/local/release/DesktopPet --output artifacts/local/release/DesktopPet-windows-x64.zip --commit "$commit"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload signed portable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DesktopPet-windows-x64
+          path: |
+            artifacts/local/release/DesktopPet-windows-x64.zip
+            artifacts/local/release/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
