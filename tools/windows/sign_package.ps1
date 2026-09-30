@@ -45,7 +45,8 @@ try {
         try {
             if (-not ($taskRoot.Certificates | Where-Object Thumbprint -EQ $taskExpected)) {
                 # Public certificate only; never copy the private key to Root.
-                $taskRoot.Add((New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($taskCertificate.RawData)))
+                $taskPublicCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($taskCertificate.RawData)
+                try { $taskRoot.Add($taskPublicCertificate) } finally { $taskPublicCertificate.Dispose() }
                 $taskImportedRoot = $true
             }
         } finally { $taskRoot.Close() }
