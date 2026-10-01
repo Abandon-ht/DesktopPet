@@ -14,6 +14,11 @@ on:
         required: true
         default: true
         type: boolean
+      resource_tag:
+        description: Existing Release containing character and voice resources
+        required: true
+        default: resources-2026-09-29
+        type: string
 
 permissions:
   contents: read
@@ -66,6 +71,16 @@ jobs:
             "$archive" | sha256sum --check --strict
       - name: Check public-package privacy guards
         run: python3 -m unittest discover -s tools/linux -p test_appimage.py -v
+      - name: Download selected Release resources
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESOURCE_TAG: ${{ inputs.resource_tag }}
+        run: |
+          mkdir -p artifacts/local/release-assets
+          gh release download "$RESOURCE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir artifacts/local/release-assets --pattern avatar.zip --pattern voice.zip \
+            --pattern models-vad.zip --pattern models-asr.zip --pattern models-tts.zip \
+            --pattern models-kws.zip --pattern SHA256SUMS.json
       - name: Run application, host and persistence tests
         run: cargo +1.95.0 test --locked -p desktop-pet -p avatar-host-2d -p pet-persistence
       - name: Compile both release executables
@@ -75,10 +90,13 @@ jobs:
           node-version: '22'
       - name: Install pinned Tauri bundling CLI
         run: npm install --prefix artifacts/local/tauri-cli --no-save --package-lock=false @tauri-apps/cli@2.11.4
-      - name: Prepare resource-free public package configuration
+      - name: Prepare package with checksum-verified Release resources
+        env:
+          RESOURCE_TAG: ${{ inputs.resource_tag }}
         run: |
           python3 tools/linux/appimage.py prepare --binaries target/release \
-            --output artifacts/local/appimage-stage
+            --output artifacts/local/appimage-stage \
+            --assets-dir artifacts/local/release-assets --resource-tag "$RESOURCE_TAG"
       - name: Bundle AppImage with GTK/WebKit and the avatar helper
         working-directory: apps/desktop
         run: |
@@ -145,6 +163,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           SOURCE_COMMIT: ${{ needs.linux.outputs.source_commit }}
+          RESOURCE_TAG: ${{ inputs.resource_tag }}
         run: |
           set -euo pipefail
           (cd release && sha256sum --check --strict SHA256SUMS.txt)
@@ -152,7 +171,7 @@ jobs:
           cat > release-notes.md <<EOF
           Linux x86_64 AppImage built on Ubuntu 22.04 from commit \`${SOURCE_COMMIT}\`.
 
-          Download **DesktopPet-linux-x86_64.AppImage**, mark it executable and launch it. Settings opens on startup; import your own prepared avatar \`manifest.json\`. Character assets and voice models are not included. Voice, KWS, greetings and web access default to disabled. User settings and saves live outside the AppImage.
+          Download **DesktopPet-linux-x86_64.AppImage**, mark it executable and launch it. Character, interaction voices and CPU ASR/VAD/TTS/KWS models from the existing resource Release are included; no separate ZIP download is needed. Settings opens on startup. Voice, KWS, greetings and web access default to disabled; enable audio in settings when input/output devices are available. Linux audio remains unvalidated. User settings and saves live outside the AppImage; LLM services/models are supplied separately by the user.
 
           Requires glibc 2.35+, a compatible GPU/Vulkan driver, an X11 compositor and an AppIndicator/StatusNotifier tray host. Native Wayland is not implemented; XWayland, other distributions, mixed DPI and multiple monitors require separate validation. Other-application window snapping is not implemented on Linux.
 
@@ -163,6 +182,7 @@ jobs:
           Build: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           Build and usage: https://github.com/${GITHUB_REPOSITORY}/blob/${SOURCE_COMMIT}/BUILDING.linux.md
           Resource provenance: https://github.com/${GITHUB_REPOSITORY}/blob/${SOURCE_COMMIT}/docs/ASSETS.md
+          Resource Release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RESOURCE_TAG}
           Use and copyright: https://github.com/${GITHUB_REPOSITORY}/blob/${SOURCE_COMMIT}/POLICY.md
           EOF
           assets=(release/DesktopPet-linux-x86_64.AppImage release/SHA256SUMS.txt release/appimage-audit.json release/appimage-smoke.json)

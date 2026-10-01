@@ -23,8 +23,16 @@ def main():
             path = directory / name
             path.mkdir(mode=0o700)
             env[key] = str(path)
-        for key in ("DESKTOPPET_MODEL", "DESKTOPPET_RESOURCE_DIR"):
-            env.pop(key, None)
+        env.pop("DESKTOPPET_MODEL", None)
+        # CI has no acceptance GPU: launch the exact packaged executable with
+        # isolated resource defaults. The full bundled assets are audited separately.
+        test_resources = directory / "resources"
+        test_resources.mkdir()
+        (test_resources / "show-settings-on-launch").touch()
+        (test_resources / "voice-settings.json").write_text(json.dumps(dict(
+            enabled=False, kws_enabled=False, wake_greeting_enabled=False,
+            timed_greetings_enabled=False, first_greeting_enabled=False, web_enabled=False)))
+        env["DESKTOPPET_RESOURCE_DIR"] = str(test_resources)
         logpath = directory / "app.log"
         with logpath.open("w") as log:
             app = subprocess.Popen([str(image), "--appimage-extract-and-run"],
@@ -54,7 +62,7 @@ def main():
                 assert any(e.get("event") == "app_status" for e in events), logpath.read_text()
                 assert list((directory / "data").rglob("care.sqlite3")), "per-user persistence missing"
                 report.write_text(json.dumps(dict(passed=True,
-                    scope="FUSE-free AppImage startup, mapped settings and per-user saves on Xvfb; no character/GPU/audio/Wayland test"), indent=2) + "\n")
+                    scope="FUSE-free packaged executable startup with isolated model-free resource override, mapped settings and per-user saves on Xvfb; bundled resources audited separately; no GPU/audio/Wayland test"), indent=2) + "\n")
                 print(report.read_text())
             finally:
                 if app.poll() is None:

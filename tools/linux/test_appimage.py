@@ -6,6 +6,8 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+import shutil
+import zipfile
 
 import appimage
 
@@ -30,17 +32,16 @@ class PublicPackageTests(unittest.TestCase):
         elf(self.loader)
         self.stage = self.root / "stage"
 
-    def prepare(self):
+    def prepare(self, assets=None):
         with contextlib.redirect_stdout(io.StringIO()):
-            appimage.prepare(self.binaries, self.stage, self.loader)
+            appimage.prepare(self.binaries, self.stage, self.loader, assets,
+                             "fixture-resources" if assets else None)
 
-    def appdir(self):
-        self.prepare()
+    def appdir(self, assets=None):
+        self.prepare(assets)
         directory = self.root / "AppDir"
         resources = directory / "usr/bin/resources"
-        resources.mkdir(parents=True)
-        for path in (self.stage / "resources").iterdir():
-            (resources / path.name).write_bytes(path.read_bytes())
+        shutil.copytree(self.stage / "resources", resources)
         for name in ("desktop-pet", "avatar-host-2d"):
             elf(directory / "usr/bin" / name)
         for name in ("usr/lib/libvulkan.so.1", "usr/lib/WebKitWebProcess", "usr/lib/WebKitNetworkProcess"):
@@ -49,6 +50,60 @@ class PublicPackageTests(unittest.TestCase):
         (directory / "AppRun").chmod(0o755)
         commit = json.loads((resources / "release.json").read_text())["source_commit"]
         return directory, commit
+
+    def assets(self, bad_entry=None):
+        directory = self.root / "assets"
+        directory.mkdir()
+        checks = {}
+        for name in appimage.ARCHIVES:
+            with zipfile.ZipFile(directory / name, "w") as archive:
+                if name == "avatar.zip":
+                    archive.writestr("avatar/manifest.json", '{"renderer":"live2d_mocari"}')
+                    archive.writestr("avatar/demo.moc3", "fixture")
+                    if bad_entry:
+                        archive.writestr(bad_entry, "unsafe")
+                elif name == "voice.zip":
+                    archive.writestr("voice/demo.wav", "fixture")
+                else:
+                    archive.writestr(f"models/{name}.onnx", "fixture")
+                archive.writestr(f"notices/{name}.sources.md", "fixture provenance")
+            path = directory / name
+            checks[name] = dict(sha256=appimage.digest(path), bytes=path.stat().st_size)
+        (directory / "SHA256SUMS.json").write_text(json.dumps(checks))
+        return directory
+
+    def test_selected_release_resources_pass_and_preserve_notices(self):
+        directory, commit = self.appdir(self.assets())
+        metadata = appimage.audit(directory, commit)
+        self.assertTrue(metadata["bundled_character"])
+        self.assertTrue(metadata["bundled_voice_models"])
+        self.assertEqual(metadata["resource_tag"], "fixture-resources")
+        self.assertEqual(len(list((directory / "usr/bin/resources/notices").iterdir())), 6)
+        settings = json.loads((directory / "usr/bin/resources/voice-settings.json").read_text())
+        self.assertEqual(settings["model_dir"], "@desktop-pet-resources/models")
+
+    def test_rejects_changed_resource_archive_before_unpacking(self):
+        assets = self.assets()
+        with (assets / "avatar.zip").open("ab") as stream:
+            stream.write(b"tampered")
+        with self.assertRaises(ValueError):
+            self.prepare(assets)
+        self.assertFalse((self.stage / "resources/avatar").exists())
+
+    def test_rejects_changed_packaged_resource(self):
+        directory, commit = self.appdir(self.assets())
+        (directory / "usr/bin/resources/avatar/demo.moc3").write_text("tampered")
+        with self.assertRaises(ValueError):
+            appimage.audit(directory, commit)
+
+    def test_rejects_archive_traversal(self):
+        with self.assertRaises(ValueError):
+            self.prepare(self.assets("../leak"))
+        self.assertFalse((self.stage / "leak").exists())
+
+    def test_rejects_private_data_in_verified_archive(self):
+        with self.assertRaises(ValueError):
+            self.prepare(self.assets("avatar/.env"))
 
     def test_only_allowlisted_resources_and_sidecar_are_staged(self):
         (self.binaries / "private.onnx").write_text("never publish")

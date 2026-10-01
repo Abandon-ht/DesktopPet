@@ -52,9 +52,9 @@ The [P7 roadmap](docs/05-roadmap.md) gives an early **10–20 person-days and up
 
 `.github/workflows/linux-manual.yml` is registered on `master` and checks out the `source_ref` input (default `codex/linux-x11-baseline`). Prefer an exact source commit for publication. `publish_release` defaults to true; false retains the Actions artifact only. Linux tags use `linux-v0.1.0-alpha.<run_number>` independently of other platforms.
 
-The pipeline fixes Ubuntu 22.04 x86_64, Rust 1.95.0, Cargo.lock and Tauri CLI 2.11.4. It verifies the sherpa-onnx 1.13.8 native archive checksum, runs application/host/persistence tests and checks public-package privacy. The AppImage contains both executables, GTK/WebKit dependencies and a Vulkan loader. GPU drivers and ICDs come from the host. No character, speech models, credentials or development data are bundled; voice, KWS, greetings and web access default to disabled.
+The pipeline fixes Ubuntu 22.04 x86_64, Rust 1.95.0, Cargo.lock and Tauri CLI 2.11.4. It verifies the sherpa-onnx 1.13.8 native archive checksum, runs application/host/persistence tests and checks public-package privacy. The AppImage contains both executables, GTK/WebKit dependencies and a Vulkan loader. GPU drivers and ICDs come from the host. The `resource_tag` input defaults to `resources-2026-09-29`, shared with macOS/Windows. Selected character, interaction voices and CPU ASR/VAD/TTS/KWS archives are verified by size and SHA-256 and bundled with their provenance notices. No arbitrary local resource directory, credentials, development saves, optional ncnn backend or LLM weights are included. Voice, KWS, greetings and web access default to disabled; enable audio in settings when devices are available. Linux audio remains unvalidated.
 
-The extracted package is audited for architecture, WebKit helpers, source provenance, private assets, escaping links and a maximum glibc symbol requirement of 2.35. Xvfb validates FUSE-free startup, mapped settings and per-user saves. This is not GPU, transparency, audio or Wayland acceptance.
+The extracted package is audited for architecture, WebKit helpers, source provenance, the complete selected resource file inventory and hashes, unexpected assets, escaping links and a maximum glibc symbol requirement of 2.35. Xvfb validates the packaged executable’s FUSE-free startup, mapped settings and per-user saves using an isolated model-free resource override. This is not GPU, transparency, audio or Wayland acceptance.
 
 Download `DesktopPet-linux-x86_64.AppImage` and `SHA256SUMS.txt`, then run:
 
@@ -64,7 +64,7 @@ chmod +x DesktopPet-linux-x86_64.AppImage
 ./DesktopPet-linux-x86_64.AppImage
 ```
 
-Settings opens on launch; import your own prepared avatar `manifest.json`. Saves use the normal user data directory outside the image. A compatible Vulkan GPU driver, X11 compositor and AppIndicator/StatusNotifier tray host are required. Append `--appimage-extract-and-run` if FUSE is unavailable, or extract with `--appimage-extract` and run `./AppRun` from the extracted directory.
+The bundled character and settings open on launch; no separate resource ZIP download is needed. Additional prepared avatar `manifest.json` packs can be imported in settings. Saves use the normal user data directory outside the image. A compatible Vulkan GPU driver, X11 compositor and AppIndicator/StatusNotifier tray host are required. Append `--appimage-extract-and-run` if FUSE is unavailable, or extract with `--appimage-extract` and run `./AppRun` from the extracted directory.
 
 For the previously verified NVIDIA Vulkan / XFCE X11 transparency combination only:
 

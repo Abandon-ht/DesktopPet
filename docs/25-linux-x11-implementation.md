@@ -143,4 +143,4 @@ python3 tools/linux/verify-tray.py /absolute/DesktopPet-Linux-Interaction \
 
 用户已完成当前服务器设置页面的交互测试。此确认仅对应上述 Ubuntu 22.04 / XFCE / X11 会话，不能扩展为其他发行版或 Wayland 验收。
 
-新增 `.github/workflows/linux-manual.yml` 在 `master` 注册手动入口，并从 `source_ref` 构建 Linux 提交。公开 AppImage 使用 `tools/linux/appimage.py` 准备明确列出的程序配置、打包同目录宿主及 Vulkan loader，拒绝私有资产与开发存档污染。Tauri CLI 2.11.4 负责 GTK/WebKit AppImage 布局，提取审核和独立 Xvfb 启动检查通过后发布带校验和与报告的 Linux 预发布。公开包不带角色或语音模型，用户从设置导入自己的角色；服务器私有交互包继续保留本地。操作说明见 [Linux 构建文档](../BUILDING.linux.zh-CN.md#手动-actions--appimage-预发布)。
+新增 `.github/workflows/linux-manual.yml` 在 `master` 注册手动入口，并从 `source_ref` 构建 Linux 提交。AppImage 使用 `tools/linux/appimage.py` 准备程序配置、校验并合入 `resource_tag` 指定的现有资源 Release、打包同目录宿主及 Vulkan loader，拒绝未登记资产、凭证与开发存档污染。Tauri CLI 2.11.4 负责 GTK/WebKit AppImage 布局，提取审核和独立 Xvfb 启动检查通过后发布带校验和与报告的 Linux 预发布。发布包沿用 Windows / macOS 的角色、互动语音及 CPU 模型资源，不需要另外下载 ZIP；语音默认关闭且 Linux 音频未实测。资源权利状态保留现有来源说明；服务器私有交互包继续保留本地。操作说明见 [Linux 构建文档](../BUILDING.linux.zh-CN.md#手动-actions--appimage-预发布)。

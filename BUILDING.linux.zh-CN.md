@@ -52,9 +52,9 @@ cargo +1.95.0 build --locked --release -p desktop-pet -p avatar-host-2d
 
 工作流为 `.github/workflows/linux-manual.yml`，在默认 `master` 分支登记；`source_ref` 指定要构建的 Linux 分支、标签或提交，默认 `codex/linux-x11-baseline`。为可追溯发布，建议手动触发时填入完整提交 SHA。`publish_release` 默认开启，关闭时仅保留 Actions 构建产物。发布标签为 `linux-v0.1.0-alpha.<run_number>`，不会覆盖其他平台的 Release。
 
-流程固定 Ubuntu 22.04 x86_64、Rust 1.95.0、Cargo.lock 和 Tauri CLI 2.11.4。sherpa-onnx 1.13.8 的原生静态库归档按 SHA-256 校验；不下载角色或语音模型。执行主程序、宿主和存档测试，以及公开包的隐私／架构检查。打包器包含两程序、GTK/WebKit 依赖与动态加载的 Vulkan loader，GPU 驱动及 ICD 由用户系统提供。
+流程固定 Ubuntu 22.04 x86_64、Rust 1.95.0、Cargo.lock 和 Tauri CLI 2.11.4。sherpa-onnx 1.13.8 的原生静态库归档按 SHA-256 校验；从 `resource_tag` 指定的现有资源 Release 下载角色、互动语音和 CPU ASR/VAD/TTS/KWS 模型，并逐个校验 ZIP 大小及 SHA-256。默认使用与 macOS / Windows 相同的 `resources-2026-09-29`；不包含可选 ncnn 后端或 LLM 权重。执行主程序、宿主和存档测试，以及公开包的隐私／架构检查。打包器包含两程序、GTK/WebKit 依赖与动态加载的 Vulkan loader，GPU 驱动及 ICD 由用户系统提供。
 
-AppImage 资源只有启动设置窗口标记、默认关闭语音／KWS／问候／联网的配置及源码提交元数据；不含私有角色、模型、凭证或开发存档目录。辅助进程位于主程序同目录，资源位于同目录的 `resources/`，存档使用 Tauri 正常用户数据目录。解包验收会拒绝私有资源、开发存档标记、宿主 GPU 驱动、越界链接或高于 glibc 2.35 的程序符号要求。Xvfb 检查 FUSE-free 启动、设置窗口与用户存档；不代表真实 GPU、透明交互、音频或 Wayland 已通过。
+AppImage 包含上述已发布资源、上游来源说明、启动设置窗口标记、默认关闭语音／KWS／问候／联网的配置及源码／资源提交元数据；无需另外下载资源 ZIP。不会扫描或上传本地私人资源目录、凭证或开发存档。语音模型和互动音频已附带，启用语音前需要配置实际输入／输出设备；Linux 音频尚未实测。辅助进程位于主程序同目录，资源位于同目录的 `resources/`，存档使用 Tauri 正常用户数据目录。解包验收校验所有已选资源文件的哈希，并拒绝未登记素材、开发存档标记、宿主 GPU 驱动、越界链接或高于 glibc 2.35 的程序符号要求。Xvfb 用隔离的无角色资源覆盖检查实际打包程序的 FUSE-free 启动、设置窗口与用户存档；不代表真实 GPU、透明交互、音频或 Wayland 已通过。
 
 下载 Release 的 `DesktopPet-linux-x86_64.AppImage` 和 `SHA256SUMS.txt` 后：
 
@@ -64,7 +64,7 @@ chmod +x DesktopPet-linux-x86_64.AppImage
 ./DesktopPet-linux-x86_64.AppImage
 ```
 
-首次启动打开设置，在角色库导入用户自己的准备好的 `manifest.json`。关闭设置后使用托盘重新打开或退出。机器需有 X11 合成器、StatusNotifier / AppIndicator 宿主及兼容的 Vulkan GPU 驱动。缺少 FUSE 时加 `--appimage-extract-and-run`；也可 `--appimage-extract` 后从解包目录运行 `./AppRun`。
+首次启动显示内置角色及设置，角色库也可导入用户自己的准备好的 `manifest.json`。关闭设置后使用托盘重新打开或退出。机器需有 X11 合成器、StatusNotifier / AppIndicator 宿主及兼容的 Vulkan GPU 驱动。缺少 FUSE 时加 `--appimage-extract-and-run`；也可 `--appimage-extract` 后从解包目录运行 `./AppRun`。
 
 对于已经实测的 NVIDIA Vulkan / XFCE X11 透明组合，显式使用：
 
