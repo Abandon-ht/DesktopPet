@@ -38,6 +38,7 @@ jobs:
       CARGO_TERM_COLOR: always
       APPIMAGE_EXTRACT_AND_RUN: '1'
       SHERPA_ONNX_ARCHIVE_DIR: ${{ github.workspace }}/artifacts/local/native-archives
+      SHERPA_ONNX_LIB_DIR: ${{ github.workspace }}/artifacts/local/native-archives/extracted/sherpa-onnx-v1.13.8-linux-x64-static-lib/lib
     steps:
       - uses: actions/checkout@v4
         with:
@@ -69,6 +70,17 @@ jobs:
           printf '%s  %s\n' \
             e1fdc5b67530e15741ef897fa5ffff297056f3bf0c6d829a27af9225a4c4b5a6 \
             "$archive" | sha256sum --check --strict
+          # Cargo cache may retain an empty prebuilt directory after pruning .a
+          # files. Keep verified native libraries outside target/ and select the
+          # complete directory explicitly for both test and release profiles.
+          mkdir -p "$SHERPA_ONNX_ARCHIVE_DIR/extracted"
+          tar -xjf "$archive" -C "$SHERPA_ONNX_ARCHIVE_DIR/extracted"
+          for library in sherpa-onnx-c-api sherpa-onnx-core kaldi-decoder-core \
+            sherpa-onnx-kaldifst-core sherpa-onnx-fstfar sherpa-onnx-fst \
+            kaldi-native-fbank-core kissfft-float piper_phonemize espeak-ng ucd \
+            onnxruntime ssentencepiece_core; do
+            test -s "$SHERPA_ONNX_LIB_DIR/lib${library}.a"
+          done
       - name: Check public-package privacy guards
         run: python3 -m unittest discover -s tools/linux -p test_appimage.py -v
       - name: Download selected Release resources

@@ -52,7 +52,7 @@ cargo +1.95.0 build --locked --release -p desktop-pet -p avatar-host-2d
 
 工作流为 `.github/workflows/linux-manual.yml`，在默认 `master` 分支登记；`source_ref` 指定要构建的 Linux 分支、标签或提交，默认 `codex/linux-x11-baseline`。为可追溯发布，建议手动触发时填入完整提交 SHA。`publish_release` 默认开启，关闭时仅保留 Actions 构建产物。发布标签为 `linux-v0.1.0-alpha.<run_number>`，不会覆盖其他平台的 Release。
 
-流程固定 Ubuntu 22.04 x86_64、Rust 1.95.0、Cargo.lock 和 Tauri CLI 2.11.4。sherpa-onnx 1.13.8 的原生静态库归档按 SHA-256 校验；从 `resource_tag` 指定的现有资源 Release 下载角色、互动语音和 CPU ASR/VAD/TTS/KWS 模型，并逐个校验 ZIP 大小及 SHA-256。默认使用与 macOS / Windows 相同的 `resources-2026-09-29`；不包含可选 ncnn 后端或 LLM 权重。执行主程序、宿主和存档测试，以及公开包的隐私／架构检查。打包器包含两程序、GTK/WebKit 依赖与动态加载的 Vulkan loader，GPU 驱动及 ICD 由用户系统提供。
+流程固定 Ubuntu 22.04 x86_64、Rust 1.95.0、Cargo.lock 和 Tauri CLI 2.11.4。sherpa-onnx 1.13.8 的原生静态库归档按 SHA-256 校验；从 `resource_tag` 指定的现有资源 Release 下载角色、互动语音和 CPU ASR/VAD/TTS/KWS 模型，并逐个校验 ZIP 大小及 SHA-256。原生库在 Cargo 缓存以外重新解包并检查完整性，通过 `SHERPA_ONNX_LIB_DIR` 同时提供给测试和发布编译，避免缓存裁剪 `.a` 后留下空目录。默认使用与 macOS / Windows 相同的 `resources-2026-09-29`；不包含可选 ncnn 后端或 LLM 权重。执行主程序、宿主和存档测试，以及公开包的隐私／架构检查。打包器包含两程序、GTK/WebKit 依赖与动态加载的 Vulkan loader，GPU 驱动及 ICD 由用户系统提供。
 
 AppImage 包含上述已发布资源、上游来源说明、启动设置窗口标记、默认关闭语音／KWS／问候／联网的配置及源码／资源提交元数据；无需另外下载资源 ZIP。不会扫描或上传本地私人资源目录、凭证或开发存档。语音模型和互动音频已附带，启用语音前需要配置实际输入／输出设备；Linux 音频尚未实测。辅助进程位于主程序同目录，资源位于同目录的 `resources/`，存档使用 Tauri 正常用户数据目录。解包验收校验所有已选资源文件的哈希，并拒绝未登记素材、开发存档标记、宿主 GPU 驱动、越界链接或高于 glibc 2.35 的程序符号要求。Xvfb 用隔离的无角色资源覆盖检查实际打包程序的 FUSE-free 启动、设置窗口与用户存档；不代表真实 GPU、透明交互、音频或 Wayland 已通过。
 
