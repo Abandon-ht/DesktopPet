@@ -1,0 +1,177 @@
+name: Build Linux AppImage (manual)
+run-name: Linux x86_64 AppImage · ${{ inputs.source_ref }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Linux branch, tag or commit to build
+        required: true
+        default: codex/linux-x11-baseline
+        type: string
+      publish_release:
+        description: Publish the verified AppImage as a Linux prerelease
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-manual-${{ inputs.source_ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    outputs:
+      source_commit: ${{ steps.source.outputs.commit }}
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_TERM_COLOR: always
+      APPIMAGE_EXTRACT_AND_RUN: '1'
+      SHERPA_ONNX_ARCHIVE_DIR: ${{ github.workspace }}/artifacts/local/native-archives
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+      - name: Record the resolved source commit
+        id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Install build, bundling and smoke-test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev libasound2-dev pkg-config \
+            libvulkan1 libfuse2 patchelf squashfs-tools desktop-file-utils \
+            xvfb x11-utils dbus-x11 python3-dbus libxtst6 libxss1
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-ubuntu2204-x86_64
+          cache-on-failure: true
+      - name: Download and verify the pinned sherpa native archive
+        run: |
+          mkdir -p "$SHERPA_ONNX_ARCHIVE_DIR"
+          archive="$SHERPA_ONNX_ARCHIVE_DIR/sherpa-onnx-v1.13.8-linux-x64-static-lib.tar.bz2"
+          curl --fail --location --retry 3 \
+            https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-v1.13.8-linux-x64-static-lib.tar.bz2 \
+            --output "$archive"
+          printf '%s  %s\n' \
+            e1fdc5b67530e15741ef897fa5ffff297056f3bf0c6d829a27af9225a4c4b5a6 \
+            "$archive" | sha256sum --check --strict
+      - name: Check public-package privacy guards
+        run: python3 -m unittest discover -s tools/linux -p test_appimage.py -v
+      - name: Run application, host and persistence tests
+        run: cargo +1.95.0 test --locked -p desktop-pet -p avatar-host-2d -p pet-persistence
+      - name: Compile both release executables
+        run: cargo +1.95.0 build --locked --release -p desktop-pet -p avatar-host-2d
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned Tauri bundling CLI
+        run: npm install --prefix artifacts/local/tauri-cli --no-save --package-lock=false @tauri-apps/cli@2.11.4
+      - name: Prepare resource-free public package configuration
+        run: |
+          python3 tools/linux/appimage.py prepare --binaries target/release \
+            --output artifacts/local/appimage-stage
+      - name: Bundle AppImage with GTK/WebKit and the avatar helper
+        working-directory: apps/desktop
+        run: |
+          ../../artifacts/local/tauri-cli/node_modules/.bin/tauri bundle --ci \
+            --bundles appimage \
+            --config ../../artifacts/local/appimage-stage/tauri-appimage.conf.json
+      - name: Audit the extracted AppImage before publication
+        env:
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          mkdir -p artifacts/local/release
+          mapfile -t images < <(find target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -type f)
+          test "${#images[@]}" -eq 1
+          cp "${images[0]}" artifacts/local/release/DesktopPet-linux-x86_64.AppImage
+          chmod +x artifacts/local/release/DesktopPet-linux-x86_64.AppImage
+          python3 tools/linux/appimage.py verify \
+            --image artifacts/local/release/DesktopPet-linux-x86_64.AppImage \
+            --expected-commit "$SOURCE_COMMIT" \
+            --report artifacts/local/release/appimage-audit.json
+      - name: Smoke-test FUSE-free startup on an isolated X11 session
+        run: |
+          xvfb-run -a dbus-run-session -- python3 tools/linux/smoke-appimage.py \
+            artifacts/local/release/DesktopPet-linux-x86_64.AppImage \
+            artifacts/local/release/appimage-smoke.json
+      - name: Create release checksum
+        working-directory: artifacts/local/release
+        run: sha256sum DesktopPet-linux-x86_64.AppImage > SHA256SUMS.txt
+      - name: Upload the verified package and audit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: DesktopPet-linux-x86_64
+          path: |
+            artifacts/local/release/DesktopPet-linux-x86_64.AppImage
+            artifacts/local/release/SHA256SUMS.txt
+            artifacts/local/release/appimage-audit.json
+            artifacts/local/release/appimage-smoke.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Preserve failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DesktopPet-linux-diagnostics
+          path: |
+            artifacts/local/release/*.json
+            artifacts/local/release/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  publish:
+    if: ${{ inputs.publish_release }}
+    needs: linux
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: DesktopPet-linux-x86_64
+          path: release
+      - name: Publish the Linux prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ needs.linux.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          (cd release && sha256sum --check --strict SHA256SUMS.txt)
+          tag="linux-v0.1.0-alpha.${GITHUB_RUN_NUMBER}"
+          cat > release-notes.md <<EOF
+          Linux x86_64 AppImage built on Ubuntu 22.04 from commit \`${SOURCE_COMMIT}\`.
+
+          Download **DesktopPet-linux-x86_64.AppImage**, mark it executable and launch it. Settings opens on startup; import your own prepared avatar \`manifest.json\`. Character assets and voice models are not included. Voice, KWS, greetings and web access default to disabled. User settings and saves live outside the AppImage.
+
+          Requires glibc 2.35+, a compatible GPU/Vulkan driver, an X11 compositor and an AppIndicator/StatusNotifier tray host. Native Wayland is not implemented; XWayland, other distributions, mixed DPI and multiple monitors require separate validation. Other-application window snapping is not implemented on Linux.
+
+          For the previously verified NVIDIA Vulkan / XFCE X11 transparency combination, launch with \`GDK_BACKEND=x11 DESKTOPPET_X11_OPAQUE_ALPHA=1 ./DesktopPet-linux-x86_64.AppImage\`. This opt-in is not a claim of compatibility with every NVIDIA desktop.
+
+          If FUSE is unavailable, append \`--appimage-extract-and-run\`. SHA-256 and packaging/smoke reports are attached. CI verifies packaging and Xvfb startup, not real GPU rendering or audio.
+
+          Build: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          Build and usage: https://github.com/${GITHUB_REPOSITORY}/blob/${SOURCE_COMMIT}/BUILDING.linux.md
+          Resource provenance: https://github.com/${GITHUB_REPOSITORY}/blob/${SOURCE_COMMIT}/docs/ASSETS.md
+          Use and copyright: https://github.com/${GITHUB_REPOSITORY}/blob/${SOURCE_COMMIT}/POLICY.md
+          EOF
+          assets=(release/DesktopPet-linux-x86_64.AppImage release/SHA256SUMS.txt release/appimage-audit.json release/appimage-smoke.json)
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+            gh release edit "$tag" --notes-file release-notes.md
+          else
+            gh release create "$tag" "${assets[@]}" --target "$SOURCE_COMMIT" \
+              --prerelease --latest=false \
+              --title "DesktopPet 0.1.0 alpha ${GITHUB_RUN_NUMBER} · Linux x86_64" \
+              --notes-file release-notes.md
+          fi
