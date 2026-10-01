@@ -138,3 +138,9 @@ python3 tools/linux/verify-tray.py /absolute/DesktopPet-Linux-Interaction \
 尚待后续阶段：多屏／混合 DPI、热插拔与休眠恢复、其他窗口管理器、完整设置操作验收、麦克风／扬声器和 CPU 语音模型、Linux 凭证存储、明确可分发的演示资源、安装包与发行流程。X11 他应用窗口吸附当前明确拒绝启用；设置页面仍保留 macOS 的权限提示文案，Linux 测试时不要启用该实验开关。原生 Wayland 需要另做实现和验收。
 
 本次日志、私有截图和资源清单保存在忽略目录 `artifacts/local/linux-x11-2026-10-01/`；它们不是发行资源。详细实测范围以该目录的报告和 JSON 结果为准。
+
+## 页面验收与 AppImage 发布入口
+
+用户已完成当前服务器设置页面的交互测试。此确认仅对应上述 Ubuntu 22.04 / XFCE / X11 会话，不能扩展为其他发行版或 Wayland 验收。
+
+新增 `.github/workflows/linux-manual.yml` 在 `master` 注册手动入口，并从 `source_ref` 构建 Linux 提交。公开 AppImage 使用 `tools/linux/appimage.py` 准备明确列出的程序配置、打包同目录宿主及 Vulkan loader，拒绝私有资产与开发存档污染。Tauri CLI 2.11.4 负责 GTK/WebKit AppImage 布局，提取审核和独立 Xvfb 启动检查通过后发布带校验和与报告的 Linux 预发布。公开包不带角色或语音模型，用户从设置导入自己的角色；服务器私有交互包继续保留本地。操作说明见 [Linux 构建文档](../BUILDING.linux.zh-CN.md#手动-actions--appimage-预发布)。

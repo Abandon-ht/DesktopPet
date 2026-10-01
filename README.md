@@ -36,7 +36,7 @@ Contributors and users must not use this project to create or distribute sexuali
 | [P3-W 联网查询与受限 Agent](docs/24-p3-web-agent.md) | 搜索服务、只读工具循环、来源展示、测试方式与当前限制 |
 | [Linux X11 第一阶段](docs/25-linux-x11-implementation.md) | 离线构建、RTX 5090 透明窗口、原生输入与屏幕存档的实测边界 |
 
-Linux X11 的首次构建与单屏透明角色交互已在 Ubuntu 22.04 / xfwm4 / RTX 5090 验证；已补齐当前 XFCE 的真实托盘，并提供无语音私有交互测试包工具；这是实验开发基线，完整设置交互、语音和通用安装包仍需后续验收，见 [Linux 开发记录](docs/25-linux-x11-implementation.md)。
+Linux X11 的首次构建与单屏透明角色交互已在 Ubuntu 22.04 / xfwm4 / RTX 5090 验证；已补齐当前 XFCE 的真实托盘，并提供无语音私有交互测试包工具和手动 AppImage 预发布工作流；这是实验开发基线，完整设置交互、语音和通用安装包仍需后续验收，见 [Linux 开发记录](docs/25-linux-x11-implementation.md)。
 
 关键结论：
 

@@ -1,6 +1,6 @@
 # Linux build preparation and port status
 
-This repository provides an **experimental Linux X11 development baseline**, without a Linux installer or release workflow. On 2026-10-01, Ubuntu 22.04 / TigerVNC / xfwm4 / RTX 5090 passed the first builds and native character transparency, input, screen snapping and persistence checks. See the [first-stage implementation record](docs/25-linux-x11-implementation.md) for scope and offline preparation. GitHub Actions still builds only macOS `.app` and DMG artifacts. Other Linux desktops and full application behavior require separate validation. See [Building for macOS](BUILDING.md) for the current release path.
+This repository provides an **experimental Linux X11 development baseline**, with a manual AppImage build and prerelease workflow. On 2026-10-01, Ubuntu 22.04 / TigerVNC / xfwm4 / RTX 5090 passed the first builds and native character transparency, input, screen snapping and persistence checks. See the [first-stage implementation record](docs/25-linux-x11-implementation.md) for scope and offline preparation. GitHub Actions can also build a Linux x86_64 AppImage and publish it after packaging and Xvfb startup checks. Other Linux desktops and full application behavior require separate validation. See [Building for macOS](BUILDING.md) for the current release path.
 
 ## Target and prerequisites
 
@@ -47,3 +47,29 @@ Proceed through compilation, a visible character and input, X11 screen snapping 
 - Validate transparency on light and dark backgrounds; clicks through to another app; character click/drag; focus and exit; single and mixed-DPI dual monitors; display disconnect; sleep recovery; helper crashes; tray and persistence; microphone/speaker operation; and launch from an installed directory outside the source tree. Record X11 and Wayland capabilities separately.
 
 The [P7 roadmap](docs/05-roadmap.md) gives an early **10–20 person-days and up** for cross-platform work; it does not claim Linux builds today. For one developer familiar with Rust and Linux desktop APIs, allow **2–4 person-days** for first compilation and a window probe, **8–15 person-days total** for a usable X11 development app, and **15–25 person-days total** for fuller X11 behavior, packaging, and validation. A native Wayland basic mode may add **about 5–10 person-days**. These planning ranges may change with window-manager differences and native dependency findings.
+
+## Manual Actions / AppImage prerelease
+
+`.github/workflows/linux-manual.yml` is registered on `master` and checks out the `source_ref` input (default `codex/linux-x11-baseline`). Prefer an exact source commit for publication. `publish_release` defaults to true; false retains the Actions artifact only. Linux tags use `linux-v0.1.0-alpha.<run_number>` independently of other platforms.
+
+The pipeline fixes Ubuntu 22.04 x86_64, Rust 1.95.0, Cargo.lock and Tauri CLI 2.11.4. It verifies the sherpa-onnx 1.13.8 native archive checksum, runs application/host/persistence tests and checks public-package privacy. The AppImage contains both executables, GTK/WebKit dependencies and a Vulkan loader. GPU drivers and ICDs come from the host. No character, speech models, credentials or development data are bundled; voice, KWS, greetings and web access default to disabled.
+
+The extracted package is audited for architecture, WebKit helpers, source provenance, private assets, escaping links and a maximum glibc symbol requirement of 2.35. Xvfb validates FUSE-free startup, mapped settings and per-user saves. This is not GPU, transparency, audio or Wayland acceptance.
+
+Download `DesktopPet-linux-x86_64.AppImage` and `SHA256SUMS.txt`, then run:
+
+```sh
+sha256sum --check SHA256SUMS.txt
+chmod +x DesktopPet-linux-x86_64.AppImage
+./DesktopPet-linux-x86_64.AppImage
+```
+
+Settings opens on launch; import your own prepared avatar `manifest.json`. Saves use the normal user data directory outside the image. A compatible Vulkan GPU driver, X11 compositor and AppIndicator/StatusNotifier tray host are required. Append `--appimage-extract-and-run` if FUSE is unavailable, or extract with `--appimage-extract` and run `./AppRun` from the extracted directory.
+
+For the previously verified NVIDIA Vulkan / XFCE X11 transparency combination only:
+
+```sh
+GDK_BACKEND=x11 DESKTOPPET_X11_OPAQUE_ALPHA=1 ./DesktopPet-linux-x86_64.AppImage
+```
+
+Native Wayland is not implemented and XWayland remains unvalidated. Ubuntu 26.04's default GNOME session is Wayland-only; X11 applications still run through XWayland and other desktop sessions can still use X11. This does not validate DesktopPet's positioning or input on GNOME Wayland. [Ubuntu release notes](https://documentation.ubuntu.com/release-notes/26.04/summary-for-lts-users/)
