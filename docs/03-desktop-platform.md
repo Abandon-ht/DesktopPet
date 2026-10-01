@@ -15,7 +15,7 @@
 
 Wayland 的输入由 compositor 路由到 surface，普通应用不能假定知道全局鼠标或所有其他窗口几何。XWayland 也不自动赋予观察所有原生 Wayland 窗口的能力。Linux 应拆成 X11、Wayland 基础窗口模式、可选 compositor 扩展三个支持等级。[Wayland 协议模型](https://wayland.freedesktop.org/docs/book/Protocol.html)
 
-当前仓库的 Linux 编译探针、平台适配缺口和目标环境准备见 [Linux 构建准备](../BUILDING.linux.zh-CN.md)。本节能力表是设计目标，不代表 Linux 功能已经实现或实测通过。
+Linux 构建和目标环境准备见 [Linux 构建说明](../BUILDING.linux.zh-CN.md)。2026-10-01 的单屏 X11 构建、透明角色、点击穿透、拖拽、屏幕吸附和存档基线见 [第一阶段开发记录](25-linux-x11-implementation.md)。本节能力表仍是设计目标，未验收项及 Wayland 不因该基线而视为已实现。
 
 ## macOS 原生适配
 

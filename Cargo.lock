@@ -227,6 +227,7 @@ dependencies = [
  "serde_json",
  "wgpu",
  "winit",
+ "x11-dl",
 ]
 
 [[package]]

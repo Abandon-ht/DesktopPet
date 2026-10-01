@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import time
+from protocol_version import VERSION
 
 host, model = map(lambda p: str(Path(p).resolve()), sys.argv[1:])
 root = Path(__file__).resolve().parents[2]
@@ -24,7 +25,7 @@ def start(name):
     return process, log
 
 def exchange(process, sequence, kind, payload=None, request_id=None):
-    row = dict(protocol_version=1, session_id='hidden-check', sequence=sequence,
+    row = dict(protocol_version=VERSION, session_id='hidden-check', sequence=sequence,
                request_id=request_id or f'r{sequence}', type=kind, payload=payload or {})
     process.stdin.write(json.dumps(row) + '\n')
     process.stdin.flush()
@@ -41,7 +42,8 @@ def case(name, check):
         assert ready['type'] == 'ready'
         if Path(model).name == 'manifest.json':
             actions = json.loads(Path(model).read_text())['actions']
-            assert ready['payload']['avatar'] == {name: actions.get(name) is not None for name in ('head_pat', 'body_tap')}
+            for capability in ('head_pat', 'body_tap'):
+                assert ready['payload']['avatar'][capability] == (actions.get(capability) is not None)
         check(process)
         results.append(dict(case=name, passed=True))
     finally:
@@ -74,7 +76,7 @@ def lease(p):
     assert p.wait(timeout=11) != 0
 
 def wrong_version(p):
-    p.stdin.write(json.dumps(dict(protocol_version=2, session_id='hidden-check', sequence=2,
+    p.stdin.write(json.dumps(dict(protocol_version=VERSION+1, session_id='hidden-check', sequence=2,
                                  request_id='bad', type='ping', payload={})) + '\n')
     p.stdin.flush()
     assert p.wait(timeout=5) != 0
@@ -87,13 +89,13 @@ case('wrong-version', wrong_version)
 parent_code = '''
 import subprocess, sys, json, time
 p=subprocess.Popen(sys.argv[1:3],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
-p.stdin.write(json.dumps(dict(protocol_version=1,session_id='parent-death',sequence=1,request_id='hello',type='hello',payload={}))+'\\n');p.stdin.flush()
+p.stdin.write(json.dumps(dict(protocol_version=int(sys.argv[3]),session_id='parent-death',sequence=1,request_id='hello',type='hello',payload={}))+'\\n');p.stdin.flush()
 assert json.loads(p.stdout.readline())['type']=='ready'
 print(p.pid,flush=True)
 time.sleep(60)
 '''
 with (out / 'parent-death.log').open('w') as log:
-    parent = subprocess.Popen([sys.executable, '-c', parent_code, host, model], stdout=subprocess.PIPE, stderr=log, text=True)
+    parent = subprocess.Popen([sys.executable, '-c', parent_code, host, model, str(VERSION)], stdout=subprocess.PIPE, stderr=log, text=True)
     child_pid = None
     try:
         assert select.select([parent.stdout], [], [], 8)[0], 'parent startup timeout'

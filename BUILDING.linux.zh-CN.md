@@ -1,6 +1,6 @@
 # Linux 构建准备与移植状态
 
-当前仓库**尚未提供可用的 Linux 版本**。现有 GitHub Actions 只构建 macOS `.app`／DMG；没有 Linux 安装包、发布工作流或实机验收记录。下方 Cargo 命令只是编译探针：生成两个可执行文件不代表透明桌宠已经可交互。现行发行流程见 [macOS 构建说明](BUILDING.zh-CN.md)。
+当前仓库提供 **Linux X11 实验开发基线**，尚无 Linux 安装包或发布工作流。2026-10-01 已在 Ubuntu 22.04 / TigerVNC / xfwm4 / RTX 5090 上完成首次构建及原生角色透明、输入、屏幕吸附与存档测试；范围及离线构建步骤见 [第一阶段开发记录](docs/25-linux-x11-implementation.md)。现有 GitHub Actions 仍只构建 macOS `.app`／DMG。生成两个可执行文件不代表其他 Linux 桌面或完整应用功能已经通过验收；现行发行流程见 [macOS 构建说明](BUILDING.zh-CN.md)。
 
 ## 目标环境与构建前提
 
@@ -26,19 +26,19 @@ printf 'session=%s\n' "$XDG_SESSION_TYPE"
 cargo +1.95.0 build --locked --release -p desktop-pet -p avatar-host-2d
 ```
 
-如成功，输出应为 `target/release/desktop-pet` 和 `target/release/avatar-host-2d`。目前没有 Linux 构建通过的记录；Tauri、Mocari/wgpu、CPAL 和 sherpa-onnx 静态库的锁定版本组合仍须在目标机器上验证。编译探针无需角色或语音模型；运行验证则需要角色包。不要用 `tools/release/package_macos.py` 制作 Linux 包。
+输出为 `target/release/desktop-pet` 和 `target/release/avatar-host-2d`。Tauri、Mocari/wgpu、CPAL 和 sherpa-onnx 静态库的锁定版本组合已在上述 Ubuntu 22.04 环境构建通过；其他目标机器仍须验证。编译无需角色或语音模型；运行验证则需要角色包。不要用 `tools/release/package_macos.py` 制作 Linux 包。
 
 ## 当前阻碍与建议顺序
 
 | 阶段 | 当前代码状态与完成条件 |
 | --- | --- |
 | 编译探针 | 用锁定依赖编译两个程序，记录并解决 Linux 原生依赖、链接与目标架构错误。 |
-| 基础角色窗口 | `apps/avatar-host-2d/src/platform.rs` 的非 macOS 指针、桌面工作区、窗口移动和屏幕吸附仍为空实现或报错。`window.rs` 初始设置点击穿透，却只在 macOS 启用动态命中恢复。先验证透明合成和焦点，再实现 Linux 输入区域、点击／拖拽、位置恢复及屏幕吸附，并实测下层应用是否收到透明区点击。 |
+| 基础角色窗口 | 已增加 X11 指针、EWMH 工作区、位置移动和屏幕吸附，并在上述单屏环境实测透明合成、焦点、点击穿透、点击／拖拽和位置恢复。NVIDIA Vulkan 的 `Opaque` alpha 兼容需显式开启且通过视觉格式／合成器检查，见开发记录。多屏、混合 DPI 及其他窗口管理器待验收。 |
 | X11 他应用吸附 | `apps/avatar-host-2d/src/ax.rs` 的非 macOS 窗口观察器是空实现。可按 [跨平台设计](docs/03-desktop-platform.md)增加 X11／EWMH 的目标窗口观察和过滤；缺少该能力时基础桌宠仍应可用。 |
 | Wayland 基础模式 | 普通客户端无法假定拥有全局指针、任意窗口定位或其他应用窗口几何。需要按 compositor 实测透明窗口、输入区域、置顶与托盘，并为不可用的吸附／占屏功能明确降级；可选扩展需单独列出支持环境。[Wayland 协议模型](https://wayland.freedesktop.org/docs/book/Protocol.html) |
-| 语音、资源和发行 | 在 Linux 验证 CPAL 麦克风／扬声器、sherpa-onnx CPU 模型加载及外部 LLM 服务。`apps/desktop/src/main.rs` 当前按 macOS `.app/Contents/Resources` 寻找辅助进程和资源；`apps/desktop/tauri.conf.json` 关闭了打包。需重新定义 Linux 安装目录、资源相对路径与辅助进程布局，再制作并验证安装包。 |
+| 语音、资源和发行 | CPAL 麦克风／扬声器、sherpa-onnx CPU 模型加载及外部 LLM 服务待验证。Linux 开发目录已改为同目录辅助进程及 `resources/`，可用 `DESKTOPPET_RESOURCE_DIR` 覆盖；`apps/desktop/tauri.conf.json` 仍关闭打包。安装路径、托盘、凭证存储及安装包验收尚未完成。 |
 
-建议按“编译 → 可见角色与输入 → X11 屏幕吸附及存档 → CPU 语音 → 可选他应用吸附 → Linux 包 → Wayland 基础模式”推进。项目当前并未针对 Linux 实现或验收上述功能。
+按“编译 → 可见角色与输入 → X11 屏幕吸附及存档 → CPU 语音 → 可选他应用吸附 → Linux 包 → Wayland 基础模式”推进；前三项已建立单屏 X11 基线，后续及其他桌面环境分别验收。
 
 ## 资源、打包与验收
 

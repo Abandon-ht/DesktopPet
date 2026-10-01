@@ -7,6 +7,7 @@ import select
 import subprocess
 import sys
 import tempfile
+from protocol_version import VERSION
 root = Path(__file__).resolve().parents[2]
 host, model = map(lambda p: str(Path(p).resolve()), sys.argv[1:])
 out = root / 'artifacts/local/p1'
@@ -20,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix='desktop-pet-placement-') as directory:
         try:
             for sequence, kind, payload in [(1, 'hello', {}), (2, 'desktop', dict(type='set_visible', payload=False)),
                                              (3, 'desktop', dict(type='set_scale', payload=75)), (4, 'ping', {}), (5, 'shutdown', {})]:
-                process.stdin.write(json.dumps(dict(protocol_version=1, session_id='placement', sequence=sequence,
+                process.stdin.write(json.dumps(dict(protocol_version=VERSION, session_id='placement', sequence=sequence,
                                                    request_id=f'r{sequence}', type=kind, payload=payload))+'\n')
                 process.stdin.flush()
                 assert select.select([process.stdout], [], [], 7)[0], 'response timeout'

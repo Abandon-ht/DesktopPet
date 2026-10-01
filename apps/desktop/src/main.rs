@@ -1,3 +1,4 @@
+mod install_layout;
 mod library;
 mod resource_paths;
 mod voice;
@@ -1405,34 +1406,11 @@ fn monitor(
     }
 }
 fn run() -> Result<()> {
-    let macos = std::env::current_exe()?
-        .parent()
-        .context("missing executable directory")?
-        .to_path_buf();
-    let contents = macos.parent().context("missing app contents directory")?;
-    let bundled_host =
-        contents.join("Helpers/DesktopPet Avatar Host.app/Contents/MacOS/avatar-host-2d");
-    let executable = if bundled_host.is_file() {
-        bundled_host
-    } else {
-        macos.join("avatar-host-2d")
-    };
-    let model = match std::env::var_os("DESKTOPPET_MODEL") {
-        Some(path) => Some(PathBuf::from(path)),
-        None => {
-            let config = contents.join("Resources/model-path.txt");
-            if config.is_file() {
-                let configured = PathBuf::from(std::fs::read_to_string(config)?.trim());
-                Some(if configured.is_absolute() {
-                    configured
-                } else {
-                    contents.join("Resources").join(configured)
-                })
-            } else {
-                None
-            }
-        }
-    };
+    let layout = install_layout::Layout::current(&std::env::current_exe()?)?;
+    let model = layout.model()?;
+    let executable = layout.host;
+    #[cfg(target_os = "linux")]
+    let linux_resources = layout.resources;
     let (wake_tx, wake_rx) = mpsc::sync_channel(1);
     let (care_tx, care_rx) = mpsc::sync_channel(32);
     let shared = Arc::new(Shared {
@@ -1539,6 +1517,9 @@ fn run() -> Result<()> {
             }
         })
         .setup(move |app| {
+            #[cfg(target_os = "linux")]
+            let resource_dir = linux_resources.clone();
+            #[cfg(not(target_os = "linux"))]
             let resource_dir = app.path().resource_dir()?;
             let _ = setup_shared.resources.set(resource_dir.clone());
             let dev_data_dir = resource_dir.join("dev-data-dir.txt");
@@ -1700,11 +1681,7 @@ fn run() -> Result<()> {
                     }
                 })
                 .build(app)?;
-            if app
-                .path()
-                .resource_dir()?
-                .join("show-settings-on-launch")
-                .is_file()
+            if resource_dir.join("show-settings-on-launch").is_file()
                 && let Some(window) = app.get_webview_window("main")
             {
                 window.show()?;

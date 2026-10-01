@@ -1,6 +1,6 @@
 # Linux build preparation and port status
 
-This repository does **not yet provide a usable Linux version**. The existing GitHub Actions workflow builds only a macOS `.app` and DMG; there is no Linux installer, release workflow, or device validation record. The Cargo command below is a compilation probe: producing two executables does not mean the transparent companion is interactive. See [Building for macOS](BUILDING.md) for the current release path.
+This repository provides an **experimental Linux X11 development baseline**, without a Linux installer or release workflow. On 2026-10-01, Ubuntu 22.04 / TigerVNC / xfwm4 / RTX 5090 passed the first builds and native character transparency, input, screen snapping and persistence checks. See the [first-stage implementation record](docs/25-linux-x11-implementation.md) for scope and offline preparation. GitHub Actions still builds only macOS `.app` and DMG artifacts. Other Linux desktops and full application behavior require separate validation. See [Building for macOS](BUILDING.md) for the current release path.
 
 ## Target and prerequisites
 
@@ -26,19 +26,19 @@ printf 'session=%s\n' "$XDG_SESSION_TYPE"
 cargo +1.95.0 build --locked --release -p desktop-pet -p avatar-host-2d
 ```
 
-If successful, the outputs should be `target/release/desktop-pet` and `target/release/avatar-host-2d`. There is no recorded successful Linux build yet. The pinned Tauri, Mocari/wgpu, CPAL, and sherpa-onnx static-library combination must be checked on the target machine. Compilation needs no character or speech models; runtime validation needs a character pack. `tools/release/package_macos.py` cannot make a Linux package.
+The outputs are `target/release/desktop-pet` and `target/release/avatar-host-2d`. The pinned Tauri, Mocari/wgpu, CPAL, and sherpa-onnx static-library combination builds on the Ubuntu 22.04 baseline above; other target machines still require checks. Compilation needs no character or speech models; runtime validation needs a character pack. `tools/release/package_macos.py` cannot make a Linux package.
 
 ## Porting work and sequence
 
 | Stage | Current state and completion criterion |
 | --- | --- |
 | Compilation probe | Build both executables with locked dependencies; record and resolve Linux native dependency, link, and target architecture errors. |
-| Basic character window | Non-macOS pointer, work-area, move, and screen-snap functions in `apps/avatar-host-2d/src/platform.rs` are stubs or errors. `window.rs` starts with click-through enabled but activates dynamic hit-test recovery only on macOS. Verify transparent composition and focus, then implement Linux input regions, click/drag, placement restoration, and screen snapping. Test that clicks in transparent areas reach underlying apps. |
+| Basic character window | Native X11 pointer, EWMH work area, positioning and screen snapping are implemented. The single-monitor baseline passes real transparency, focus, click-through, click/drag and placement checks. NVIDIA Vulkan's `Opaque` alpha compatibility needs explicit opt-in and native visual/compositor checks; see the implementation record. Multiple monitors, mixed DPI and other WMs remain unvalidated. |
 | X11 other-window snapping | The non-macOS observer in `apps/avatar-host-2d/src/ax.rs` is a stub. X11/EWMH target-window observation and filtering can follow the [platform design](docs/03-desktop-platform.md). The basic companion should work when this optional capability is unavailable. |
 | Wayland basic mode | Ordinary clients cannot assume access to a global pointer, arbitrary window positioning, or other applications' window geometry. Test transparency, input regions, window level, and tray behavior per compositor; explicitly degrade unavailable snapping and screen-play features. List supported environments for any optional extension. [Wayland protocol model](https://wayland.freedesktop.org/docs/book/Protocol.html) |
-| Speech, resources, and distribution | Validate CPAL microphone/speaker operation, sherpa-onnx CPU model loading, and an external LLM service on Linux. `apps/desktop/src/main.rs` currently looks for the helper and resources in a macOS `.app/Contents/Resources` layout; bundling is disabled in `apps/desktop/tauri.conf.json`. Define the Linux installation, resource, and helper layout before producing and validating a package. |
+| Speech, resources, and distribution | CPAL microphone/speaker operation, sherpa-onnx CPU model loading and an external LLM service remain unvalidated. Linux development uses a sibling helper and `resources/`, with an optional `DESKTOPPET_RESOURCE_DIR` override. Bundling remains disabled. Installation paths, tray behavior, credential storage and packages still require implementation/acceptance. |
 
-Proceed through compilation, a visible character and input, X11 screen snapping and persistence, CPU speech, optional other-window snapping, a Linux package, and then native Wayland basic mode. None of those Linux behaviors has been implemented and validated in this repository yet.
+Proceed through compilation, a visible character and input, X11 screen snapping and persistence, CPU speech, optional other-window snapping, a Linux package, and then native Wayland basic mode. The first three now have a single-monitor X11 baseline; later stages and other desktops require separate acceptance.
 
 ## Assets, packaging, and validation
 

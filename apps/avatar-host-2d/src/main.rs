@@ -1,3 +1,4 @@
+mod alpha;
 mod animation;
 mod audit;
 mod ax;
@@ -9,6 +10,8 @@ mod placement;
 mod platform;
 mod snap;
 mod window;
+#[cfg(target_os = "linux")]
+mod x11;
 fn main() -> std::process::ExitCode {
     let result = (|| -> anyhow::Result<()> {
         let mut args = std::env::args_os().skip(1);

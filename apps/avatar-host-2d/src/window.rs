@@ -16,6 +16,8 @@ use std::{
 use winit::platform::macos::{
     ActivationPolicy, EventLoopBuilderExtMacOS, WindowAttributesExtMacOS,
 };
+#[cfg(target_os = "linux")]
+use winit::platform::x11::EventLoopBuilderExtX11;
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -50,6 +52,10 @@ pub fn run(entry: &Path) -> Result<()> {
         crate::audit::preflight(entry)?.0
     };
     let mut builder = EventLoop::<Control>::with_user_event();
+    // Native Wayland needs a separate positioning/input strategy. Do not select
+    // it accidentally when DISPLAY and WAYLAND_DISPLAY are both present.
+    #[cfg(target_os = "linux")]
+    builder.with_x11();
     #[cfg(target_os = "macos")]
     builder
         .with_activation_policy(ActivationPolicy::Accessory)
@@ -471,6 +477,8 @@ impl ApplicationHandler<Control> for AvatarHost {
                 Ok(())
             }
             WindowEvent::Resized(size) if size.width > 0 && size.height > 0 => {
+                #[cfg(target_os = "linux")]
+                state.input_shape.invalidate();
                 state.config.width = size.width;
                 state.config.height = size.height;
                 state.surface.configure(&state.device, &state.config);
@@ -487,6 +495,14 @@ impl ApplicationHandler<Control> for AvatarHost {
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 state.next_desktop_check = Instant::now();
+                Ok(())
+            }
+            #[cfg(target_os = "linux")]
+            WindowEvent::Moved(_) if state.visible && state.restored && !state.input.dragging => {
+                // X11 ConfigureRequest is asynchronous. A snap's immediate
+                // snapshot can still contain the pre-snap origin; persist again
+                // once the WM confirms the actual move, including the floor flag.
+                state.remember_placement();
                 Ok(())
             }
             WindowEvent::MouseInput {
@@ -565,6 +581,8 @@ struct State {
     next_frame: Instant,
     input: crate::input::Input,
     dynamic_input: bool,
+    #[cfg(target_os = "linux")]
+    input_shape: crate::x11::InputShape,
     visible: bool,
 }
 
@@ -583,7 +601,14 @@ impl State {
         overlay_mode: bool,
     ) -> Result<Self> {
         let started = Instant::now();
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        #[cfg(target_os = "linux")]
+        crate::x11::pointer_only(&window)?;
+        #[cfg(target_os = "linux")]
+        let descriptor =
+            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(window.clone())).with_env();
+        #[cfg(not(target_os = "linux"))]
+        let descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        let instance = wgpu::Instance::new(descriptor);
         let surface = instance.create_surface(window.clone())?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -600,13 +625,20 @@ impl State {
             .get_default_config(&adapter, size.width, size.height)
             .context("surface unsupported")?;
         config.format = preferred_surface_format(&caps.formats).context("no surface format")?;
-        config.alpha_mode = [
-            wgpu::CompositeAlphaMode::PreMultiplied,
-            wgpu::CompositeAlphaMode::PostMultiplied,
-        ]
-        .into_iter()
-        .find(|mode| caps.alpha_modes.contains(mode))
-        .context("surface does not support transparent compositing")?;
+        #[cfg(target_os = "linux")]
+        let verified_x11 = std::env::var("DESKTOPPET_X11_OPAQUE_ALPHA").as_deref() == Ok("1")
+            && crate::x11::alpha_visual_with_compositor(&window)?;
+        #[cfg(not(target_os = "linux"))]
+        let verified_x11 = false;
+        let info = adapter.get_info();
+        config.alpha_mode =
+            crate::alpha::select(&caps.alpha_modes, info.backend, info.vendor, verified_x11)?;
+        if config.alpha_mode == wgpu::CompositeAlphaMode::Opaque {
+            pet_ipc::event_log!(
+                "{}",
+                json!({"event":"x11_opaque_alpha_compatibility","experimental":true,"vendor":info.vendor,"backend":format!("{:?}",info.backend)})
+            );
+        }
         config.present_mode = wgpu::PresentMode::Fifo;
         surface.configure(&device, &config);
         let backend = adapter.get_info().backend;
@@ -751,7 +783,7 @@ impl State {
             &fit_matrix(model.runtime(), size.width, size.height),
         );
         let monitors: Vec<_> = window.available_monitors().map(|m| json!({"name": m.name(), "position": [m.position().x, m.position().y], "size": [m.size().width, m.size().height], "scale": m.scale_factor()})).collect();
-        let dynamic_input = cfg!(target_os = "macos");
+        let dynamic_input = cfg!(any(target_os = "macos", target_os = "linux"));
         let passthrough = true;
         window.set_cursor_hittest(!passthrough)?;
         pet_ipc::event_log!(
@@ -803,7 +835,7 @@ impl State {
             next_hit_id: 1,
             pressed: None,
             neutral_bounds: bounds,
-            snap_enabled: cfg!(target_os = "macos"),
+            snap_enabled: cfg!(any(target_os = "macos", target_os = "linux")),
             anchor_ratio,
             perch_ratio,
             backend,
@@ -823,6 +855,8 @@ impl State {
             next_frame: Instant::now(),
             input: crate::input::Input::default(),
             dynamic_input,
+            #[cfg(target_os = "linux")]
+            input_shape: crate::x11::InputShape::default(),
             visible: false,
         })
     }
@@ -892,6 +926,8 @@ impl State {
                     json!({"event":"hit_region", "receiving":receiving,"point":[x,y],"left_down":down})
                 );
             }
+            #[cfg(target_os = "linux")]
+            self.input_shape.sync(&self.window, receiving)?;
             if self.snap_enabled && was_dragging && !self.input.dragging {
                 let mut attached = false;
                 if self.external_enabled
@@ -1334,6 +1370,11 @@ impl State {
     }
     fn set_external_enabled(&mut self, enabled: bool) -> Result<()> {
         if enabled {
+            #[cfg(not(target_os = "macos"))]
+            bail!(
+                "external-window snapping is not implemented for this desktop; screen-floor snapping remains available"
+            );
+            #[cfg(target_os = "macos")]
             if crate::platform::ax_trusted() != Some(true) {
                 crate::platform::request_ax_trust();
                 bail!(
@@ -1432,6 +1473,14 @@ impl State {
         self.metrics.pause();
         self.visible = visible;
         self.window.set_visible(visible);
+        #[cfg(target_os = "linux")]
+        if visible {
+            // XFWM ignores the EWMH request sent while the initial window is
+            // unmapped. Send it after mapping so background clicks cannot raise
+            // another normal window over the pet.
+            self.window.set_window_level(WindowLevel::AlwaysOnTop);
+            self.input_shape.invalidate();
+        }
         self.next_frame = Instant::now();
         pet_ipc::event_log!(
             "{}",
