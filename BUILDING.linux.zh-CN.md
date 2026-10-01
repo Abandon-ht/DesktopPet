@@ -36,14 +36,14 @@ cargo +1.95.0 build --locked --release -p desktop-pet -p avatar-host-2d
 | 基础角色窗口 | 已增加 X11 指针、EWMH 工作区、位置移动和屏幕吸附，并在上述单屏环境实测透明合成、焦点、点击穿透、点击／拖拽和位置恢复。NVIDIA Vulkan 的 `Opaque` alpha 兼容需显式开启且通过视觉格式／合成器检查，见开发记录。多屏、混合 DPI 及其他窗口管理器待验收。 |
 | X11 他应用吸附 | `apps/avatar-host-2d/src/ax.rs` 的非 macOS 窗口观察器是空实现。可按 [跨平台设计](docs/03-desktop-platform.md)增加 X11／EWMH 的目标窗口观察和过滤；缺少该能力时基础桌宠仍应可用。 |
 | Wayland 基础模式 | 普通客户端无法假定拥有全局指针、任意窗口定位或其他应用窗口几何。需要按 compositor 实测透明窗口、输入区域、置顶与托盘，并为不可用的吸附／占屏功能明确降级；可选扩展需单独列出支持环境。[Wayland 协议模型](https://wayland.freedesktop.org/docs/book/Protocol.html) |
-| 语音、资源和发行 | CPAL 麦克风／扬声器、sherpa-onnx CPU 模型加载及外部 LLM 服务待验证。Linux 开发目录已改为同目录辅助进程及 `resources/`，可用 `DESKTOPPET_RESOURCE_DIR` 覆盖；`apps/desktop/tauri.conf.json` 仍关闭打包。安装路径、托盘、凭证存储及安装包验收尚未完成。 |
+| 语音、资源和发行 | CPAL 麦克风／扬声器、sherpa-onnx CPU 模型加载及外部 LLM 服务待验证。Linux 开发目录已改为同目录辅助进程及 `resources/`，可用 `DESKTOPPET_RESOURCE_DIR` 覆盖；`apps/desktop/tauri.conf.json` 仍关闭打包。当前 XFCE 的真实托盘、关闭设置／重开和退出路径已验证；正式安装路径、凭证存储及通用安装包验收尚未完成。 |
 
 按“编译 → 可见角色与输入 → X11 屏幕吸附及存档 → CPU 语音 → 可选他应用吸附 → Linux 包 → Wayland 基础模式”推进；前三项已建立单屏 X11 基线，后续及其他桌面环境分别验收。
 
 ## 资源、打包与验收
 
 - 角色包、互动语音和模型权重不在 Git 中。资源 ZIP 格式见 [macOS 资源清单](BUILDING.zh-CN.md#资源包)；Linux 打包器需保留校验和安全解包逻辑，不能复用 `.app` 目录布局。先用有明确再分发权限的演示资产，参见 [资源来源](docs/ASSETS.md)和[使用及版权说明](POLICY.md)。无语音基线只需有效角色包；完整语音还需 VAD、ASR、TTS／KWS 模型及参考音频，LLM 服务及模型由用户自行提供。
-- Linux 安装格式可在验证后选择 [deb、RPM 或 AppImage](https://v2.tauri.app/distribute/)；目前没有可直接运行的 Linux 打包命令。制作 AppImage 时需选定最低支持发行版并在相应基线构建，避免新系统的 glibc 依赖使旧系统无法运行。[Tauri AppImage 指南](https://v2.tauri.app/distribute/appimage/)
+- Linux 安装格式可在验证后选择 [deb、RPM 或 AppImage](https://v2.tauri.app/distribute/)；可用 `tools/linux/package-dev.py` 制作当前 X11 基线的私有交互测试目录和 tar.gz，见开发记录；尚无通用 Linux 安装包。制作 AppImage 时需选定最低支持发行版并在相应基线构建，避免新系统的 glibc 依赖使旧系统无法运行。[Tauri AppImage 指南](https://v2.tauri.app/distribute/appimage/)
 - 验收至少覆盖：深浅背景透明效果、点击下层应用与角色点击／拖拽、焦点和退出、单屏／混合 DPI 双屏、显示器拔插、睡眠恢复、宿主崩溃、托盘和存档、麦克风／扬声器，以及安装后脱离源码目录启动。X11 与 Wayland 分开记录实际支持能力。
 
 [路线图 P7](docs/05-roadmap.md)的 **10–20 人日起**是早期跨平台阶段估算，不表示 Linux 已可构建。按当前代码，单名熟悉 Rust 与 Linux 桌面 API 的开发者可暂按 **2–4 人日**做首次编译及窗口技术探针，**合计 8–15 人日**做 X11 可用开发版，**合计 15–25 人日**做较完整的 X11 功能、打包和验收；Wayland 基础模式在此基础上**另加约 5–10 人日**。这些是规划量级，窗口管理器差异及原生依赖问题可能改变结果。

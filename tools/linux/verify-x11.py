@@ -32,8 +32,14 @@ class Button(C.Structure):
                 ("state", C.c_uint), ("button", C.c_uint), ("same_screen", I)]
 
 
+class ClientMessage(C.Structure):
+    _fields_ = [("type", I), ("serial", U), ("send_event", I), ("display", P),
+                ("window", U), ("message_type", U), ("format", I),
+                ("data", C.c_long * 5)]
+
+
 class Event(C.Union):
-    _fields_ = [("button", Button), ("pad", C.c_long * 24)]
+    _fields_ = [("button", Button), ("client", ClientMessage), ("pad", C.c_long * 24)]
 
 
 class Rectangle(C.Structure):
@@ -61,6 +67,9 @@ class X11:
             "XQueryPointer": (I, [P, U, C.POINTER(U), C.POINTER(U), C.POINTER(I), C.POINTER(I), C.POINTER(I), C.POINTER(I), C.POINTER(C.c_uint)]),
             "XQueryTree": (I, [P, U, C.POINTER(U), C.POINTER(U), C.POINTER(C.POINTER(U)), C.POINTER(C.c_uint)]),
             "XFetchName": (I, [P, U, C.POINTER(P)]), "XFree": (I, [P]),
+            "XInternAtom": (U, [P, C.c_char_p, I]),
+            "XSendEvent": (I, [P, U, I, C.c_long, C.POINTER(Event)]),
+            "XGetWindowProperty": (I, [P, U, U, C.c_long, C.c_long, I, U, C.POINTER(U), C.POINTER(I), C.POINTER(U), C.POINTER(U), C.POINTER(P)]),
             "XGetGeometry": (I, [P, U, C.POINTER(U), C.POINTER(I), C.POINTER(I), C.POINTER(C.c_uint), C.POINTER(C.c_uint), C.POINTER(C.c_uint), C.POINTER(C.c_uint)]),
             "XTranslateCoordinates": (I, [P, U, U, I, I, C.POINTER(I), C.POINTER(I), C.POINTER(U)]),
             "XGetImage": (P, [P, U, I, I, C.c_uint, C.c_uint, U, I]),
@@ -152,6 +161,9 @@ class X11:
         self.button(False)
 
     def find_pet(self, parent=None):
+        return self.find_window(b"DesktopPet", parent)
+
+    def find_window(self, wanted, parent=None):
         parent = self.root if parent is None else parent
         root, ancestor, children, count = U(), U(), C.POINTER(U)(), C.c_uint()
         assert self.lib.XQueryTree(self.display, parent, C.byref(root), C.byref(ancestor), C.byref(children), C.byref(count))
@@ -164,12 +176,70 @@ class X11:
             title = C.string_at(name) if name else b""
             if name:
                 self.lib.XFree(name)
-            if title == b"DesktopPet":
+            # GTK's legacy WM_NAME may replace non-Latin characters. Prefer
+            # EWMH's UTF-8 title when locating the localized settings window.
+            actual, format_, count, after, data = U(), I(), U(), U(), P()
+            atom = self.lib.XInternAtom(self.display, b"_NET_WM_NAME", 1)
+            if atom:
+                self.lib.XGetWindowProperty(self.display, window, atom, 0, 1024, 0, 0,
+                    C.byref(actual), C.byref(format_), C.byref(count), C.byref(after), C.byref(data))
+                if data:
+                    if format_.value == 8 and after.value == 0:
+                        title = C.string_at(data, count.value)
+                    self.lib.XFree(data)
+            if title == wanted:
                 return window
-            found = self.find_pet(window)
+            found = self.find_window(wanted, window)
             if found:
                 return found
         return None
+
+    def viewable(self, window):
+        return "Map State: IsViewable" in subprocess.check_output(
+            ["xwininfo", "-id", str(window)], text=True)
+
+    def request_close(self, window):
+        event = Event()
+        event.client.type = 33
+        event.client.display = self.display
+        event.client.window = window
+        event.client.message_type = self.lib.XInternAtom(self.display, b"WM_PROTOCOLS", 0)
+        event.client.format = 32
+        event.client.data[0] = self.lib.XInternAtom(self.display, b"WM_DELETE_WINDOW", 0)
+        assert self.lib.XSendEvent(self.display, window, 0, 0, C.byref(event))
+        self.lib.XSync(self.display, 0)
+
+    def workarea(self):
+        _, _, width, height, _ = self.geometry(self.root)
+        fallback = (0, 0, width, height)
+        properties = subprocess.check_output(
+            ["xprop", "-root", "_NET_CURRENT_DESKTOP", "_NET_WORKAREA"], text=True)
+        desktop = re.search(r"_NET_CURRENT_DESKTOP\(CARDINAL\) = (\d+)", properties)
+        areas = re.search(r"_NET_WORKAREA\(CARDINAL\) = ([\d, -]+)", properties)
+        if not desktop or not areas:
+            return fallback
+        values = [int(v.strip()) for v in areas[1].split(",")]
+        index = int(desktop[1]) * 4
+        if len(values) % 4 or index + 4 > len(values):
+            return fallback
+        x, y, w, h = values[index:index + 4]
+        x = x - 2**32 if x >= 2**31 else x
+        y = y - 2**32 if y >= 2**31 else y
+        left, top, right, bottom = max(0, x), max(0, y), min(width, x + w), min(height, y + h)
+        return (left, top, right - left, bottom - top) if right > left and bottom > top else fallback
+
+    def screenshot(self, window, path):
+        _, _, w, h, _ = self.geometry(window)
+        image = self.image(window, 0, 0, w, h)
+        try:
+            pixels = bytearray()
+            for y in range(h):
+                for x in range(w):
+                    value = self.lib.XGetPixel(image, x, y)
+                    pixels.extend(((value >> 16) & 255, (value >> 8) & 255, value & 255))
+            path.write_bytes(f"P6\n{w} {h}\n255\n".encode() + pixels)
+        finally:
+            self.lib.XDestroyImage(image)
 
     def geometry(self, window):
         root, x, y, w, h, border, depth = U(), I(), I(), C.c_uint(), C.c_uint(), C.c_uint(), C.c_uint()
@@ -237,12 +307,14 @@ class X11:
             assert colored_pixels > 100, ("model not actually visible above background", (x,y,w,h), colored_pixels)
         return dict(zero_alpha=alphas.count(0), visible_alpha=sum(a > 0 for a in alphas), partial_alpha=sum(0 < a < 255 for a in alphas))
 
-    def close(self):
+    def close(self, restore_pointer=True):
         # Release even when a check failed while a test drag was held.
-        self.test.XTestFakeButtonEvent(self.display, 1, 0, 0)
+        if restore_pointer:
+            self.test.XTestFakeButtonEvent(self.display, 1, 0, 0)
         if self.background:
             self.lib.XDestroyWindow(self.display, self.background)
-        self.test.XTestFakeMotionEvent(self.display, -1, *self.original_pointer, 0)
+        if restore_pointer:
+            self.test.XTestFakeMotionEvent(self.display, -1, *self.original_pointer, 0)
         self.lib.XSync(self.display, 0)
         self.lib.XCloseDisplay(self.display)
         if self.session_bus:
@@ -348,7 +420,8 @@ def main():
         restored = native.geometry(restored_window)
         assert all(abs(a-b) <= 3 for a,b in zip(restored[:2], after_drag[:2])), ("restore failed", restored, after_drag)
         anchor = json.loads(model.read_text())["interaction"]["anchor"][1]
-        floor = native.geometry(native.root)[3]
+        workarea = native.workarea()
+        floor = workarea[1] + workarea[3]
         target_y = floor - h * anchor - 5
         native.move(restored[0] + w * .5, restored[1] + h * .27)
         native.button(True)
@@ -363,7 +436,7 @@ def main():
         host.command("set_visible", True)
         host.close()
         host = None
-        result = dict(passed=True, scope="single-monitor native X11; real model/alpha/focus/passthrough/click/owned drag/external drag/save/restore/floor snap/hide/shutdown", alpha=alpha, semantic_events=events, after_drag=after_drag, restored=restored, saved=saved, snapped=snapped, floor_saved=floor_saved)
+        result = dict(passed=True, scope="single-monitor native X11; real model/alpha/focus/passthrough/click/owned drag/external drag/save/restore/workarea floor snap/hide/shutdown", workarea=workarea, alpha=alpha, semantic_events=events, after_drag=after_drag, restored=restored, saved=saved, snapped=snapped, floor_saved=floor_saved)
         (output / "results.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
         print(json.dumps(result, ensure_ascii=False))
     finally:
