@@ -2,7 +2,8 @@
 """Real X11 avatar-host checks with an owned background and XTest input.
 
 Usage: verify-x11.py HOST PACK_MANIFEST OUTPUT_DIRECTORY
-Requires DISPLAY, libX11 and libXtst. Runs on the desktop, temporarily places a
+Requires DISPLAY, libX11, libXtst and libXss (and python3-dbus on XFCE).
+Runs on the desktop, temporarily places a
 background below the pet, then removes both windows and restores the pointer.
 No input is sent to other applications. Use a private pack only on your machine.
 """
@@ -12,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import select
+import shutil
 import subprocess
 import sys
 import time
@@ -38,6 +40,11 @@ class Rectangle(C.Structure):
     _fields_ = [("x", C.c_short), ("y", C.c_short), ("width", C.c_ushort), ("height", C.c_ushort)]
 
 
+class ScreenSaverInfo(C.Structure):
+    _fields_ = [("window", U), ("state", I), ("kind", I),
+                ("since", U), ("idle", U), ("event_mask", U)]
+
+
 class X11:
     def __init__(self):
         self.lib = C.CDLL("libX11.so.6")
@@ -50,6 +57,7 @@ class X11:
             "XClearWindow": (I, [P, U]), "XSync": (I, [P, I]), "XPending": (I, [P]),
             "XNextEvent": (I, [P, C.POINTER(Event)]), "XDestroyWindow": (I, [P, U]),
             "XCloseDisplay": (I, [P]), "XGetInputFocus": (I, [P, C.POINTER(U), C.POINTER(I)]),
+            "XResetScreenSaver": (I, [P]),
             "XQueryPointer": (I, [P, U, C.POINTER(U), C.POINTER(U), C.POINTER(I), C.POINTER(I), C.POINTER(I), C.POINTER(I), C.POINTER(C.c_uint)]),
             "XQueryTree": (I, [P, U, C.POINTER(U), C.POINTER(U), C.POINTER(C.POINTER(U)), C.POINTER(C.c_uint)]),
             "XFetchName": (I, [P, U, C.POINTER(P)]), "XFree": (I, [P]),
@@ -66,6 +74,37 @@ class X11:
         self.display = self.lib.XOpenDisplay(None)
         assert self.display, "cannot connect to DISPLAY"
         self.root = self.lib.XDefaultRootWindow(self.display)
+        # A screensaver sits above the compositor. Check before sending input;
+        # never mistake its black pixels for a transparency failure or unlock it.
+        self.screensaver = C.CDLL("libXss.so.1")
+        self.screensaver.XScreenSaverQueryInfo.argtypes = [P, U, C.POINTER(ScreenSaverInfo)]
+        self.screensaver.XScreenSaverSuspend.argtypes = [P, I]
+        info = ScreenSaverInfo()
+        available = self.screensaver.XScreenSaverQueryInfo(self.display, self.root, C.byref(info))
+        if not available or info.state != 0:
+            self.lib.XCloseDisplay(self.display)
+            raise RuntimeError("desktop screensaver is active or its status is unavailable; resume the test desktop before validation")
+        self.session_bus = None
+        if shutil.which("xfce4-screensaver-command"):
+            # XFCE can blank independently while core XScreenSaver says Off.
+            # Query only; do not change XFCE settings or attempt an unlock.
+            try:
+                import dbus
+                self.session_bus = dbus.SessionBus(private=True)
+                if self.session_bus.name_has_owner("org.xfce.ScreenSaver"):
+                    proxy = self.session_bus.get_object("org.xfce.ScreenSaver", "/org/xfce/ScreenSaver")
+                    saver = dbus.Interface(proxy, "org.xfce.ScreenSaver")
+                    if saver.GetActive():
+                        raise RuntimeError("XFCE screensaver is active; resume the test desktop before validation")
+            except BaseException:
+                if self.session_bus:
+                    self.session_bus.close()
+                self.lib.XCloseDisplay(self.display)
+                raise
+        # This inhibition ends with this X connection, including abnormal exit.
+        self.screensaver.XScreenSaverSuspend(self.display, 1)
+        self.lib.XResetScreenSaver(self.display)
+        self.lib.XSync(self.display, 0)
         self.background = 0
         self.presses = 0
         self.original_pointer = self.pointer()
@@ -183,7 +222,8 @@ class X11:
             self.lib.XSync(self.display, 0)
             time.sleep(.3)
             assert self.pixel(window, 5, 5) >> 24 == 0, "corner is not transparent"
-            assert self.pixel(self.root, x + 5, y + 5) & 0xffffff == color, "compositor did not reveal background"
+            observed = self.pixel(self.root, x + 5, y + 5) & 0xffffff
+            assert observed == color, ("compositor did not reveal background", "pet", self.geometry(window), "background", self.geometry(self.background), "expected", hex(color), "actual", hex(observed))
             image = self.image(self.root, x, y, w, h)
             pixels = bytearray()
             colored_pixels = 0
@@ -205,6 +245,8 @@ class X11:
         self.test.XTestFakeMotionEvent(self.display, -1, *self.original_pointer, 0)
         self.lib.XSync(self.display, 0)
         self.lib.XCloseDisplay(self.display)
+        if self.session_bus:
+            self.session_bus.close()
 
 
 class Host:
