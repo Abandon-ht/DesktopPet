@@ -1,0 +1,139 @@
+name: Build AX650 ARM64
+run-name: AX650 Ubuntu 22.04 ARM64 · ${{ github.ref_name }}
+
+on:
+  push:
+    branches: [ax650]
+    paths:
+      - '.github/workflows/ax650-build.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'apps/**'
+      - 'crates/**'
+      - 'vendor/**'
+      - 'tools/ax650/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ax650-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 120
+    env:
+      RUSTUP_TOOLCHAIN: '1.95.0'
+      CARGO_BUILD_JOBS: '4'
+      CARGO_TERM_COLOR: always
+      AX650_CI_ROOT: ${{ github.workspace }}/artifacts/local/ax650-ci
+      SHERPA_ONNX_LIB_DIR: ${{ github.workspace }}/artifacts/local/ax650-ci/native/lib
+      LD_LIBRARY_PATH: ${{ github.workspace }}/artifacts/local/ax650-ci/native/lib:${{ github.workspace }}/artifacts/local/ax650-ci/sdk/msp/out/lib
+      LIBRARY_PATH: ${{ github.workspace }}/artifacts/local/ax650-ci/native/lib:${{ github.workspace }}/artifacts/local/ax650-ci/sdk/msp/out/lib
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check target system and install build dependencies
+        run: |
+          source /etc/os-release
+          test "$ID" = ubuntu && test "$VERSION_ID" = 22.04
+          test "$(uname -m)" = aarch64
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential cmake ninja-build pkg-config python3 \
+            libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev libasound2-dev \
+            libx11-dev libx11-xcb-dev libxcursor-dev libxrandr-dev \
+            libxi-dev libxrender-dev libxfixes-dev libxkbcommon-dev \
+            libxkbcommon-x11-0 libegl1 libgl1 libgles2 libvulkan1
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ax650-ubuntu2204-arm64-zipvoice-5473e19-sdk-71ac841
+          cache-on-failure: true
+      - name: Check formatting, UI syntax and packaging regressions
+        run: |
+          cargo fmt --all --check
+          node --check apps/desktop/ui/app.js
+          node --check apps/desktop/ui/i18n.js
+          python3 -m unittest discover -s tools/ax650 -p test_tools.py -v
+      - name: Check out pinned ZipVoice AXERA native source
+        uses: actions/checkout@v4
+        with:
+          repository: Abandon-ht/sherpa-onnx
+          ref: 5473e19db9c08e63aa41e4c273d9b3f743f1cd25
+          path: artifacts/local/ax650-ci/sherpa
+          persist-credentials: false
+      - name: Check out public AX650 SDK (linking only)
+        uses: actions/checkout@v4
+        with:
+          repository: AXERA-TECH/ax650n_bsp_sdk
+          ref: 71ac84128ebc96219a9bd4348a49c43527bc605d
+          path: artifacts/local/ax650-ci/sdk
+          persist-credentials: false
+      - name: Build AXERA shared runtime and verify the C / Rust ABI
+        run: bash tools/ax650/ci-native.sh "$AX650_CI_ROOT/sherpa" "$AX650_CI_ROOT/sdk" "$AX650_CI_ROOT/native"
+      - name: Compile desktop application, avatar host and diagnostic CLI
+        run: cargo build --locked --release -p desktop-pet -p avatar-host-2d -p desktop-pet-ax650
+      - name: Run pure application and voice regressions
+        run: cargo test --locked --release -p desktop-pet -p pet-voice-session
+      - name: Verify ARM64 / glibc and stage code-only artifact
+        run: |
+          python3 tools/ax650/package.py --verify-binaries target/release --include-cli
+          mkdir -p "$AX650_CI_ROOT/output/bin" "$AX650_CI_ROOT/output/lib"
+          for binary in desktop-pet avatar-host-2d desktop-pet-ax650; do
+            dependencies=$(ldd "target/release/$binary")
+            if [[ "$dependencies" == *'not found'* ]]; then
+              echo "$dependencies" >&2
+              exit 1
+            fi
+            cp "target/release/$binary" "$AX650_CI_ROOT/output/bin/"
+          done
+          cp -a "$SHERPA_ONNX_LIB_DIR/"*.so* "$AX650_CI_ROOT/output/lib/"
+          cp -a "$AX650_CI_ROOT/native/licenses" "$AX650_CI_ROOT/output/"
+          python3 - <<'PY'
+          import hashlib, importlib.util, json, os, pathlib, subprocess
+          root = pathlib.Path(os.environ['AX650_CI_ROOT']) / 'output'
+          spec = importlib.util.spec_from_file_location('ax650_package', 'tools/ax650/package.py')
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          elf = {str(p.relative_to(root)): module.verify_elf(p)
+                 for p in sorted(root.glob('lib/*.so*')) if not p.is_symlink()}
+          for path in root.glob('lib/*.so*'):
+              deps = subprocess.check_output(['ldd', str(path)], text=True)
+              if 'not found' in deps:
+                  raise SystemExit(deps)
+          record = {
+              'source_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'sherpa_revision': '5473e19db9c08e63aa41e4c273d9b3f743f1cd25',
+              'sdk_revision': '71ac84128ebc96219a9bd4348a49c43527bc605d',
+              'system': 'Ubuntu 22.04 ARM64', 'rust': '1.95.0', 'provider': 'axera',
+              'native_origin': 'source-built CI runtime; differs from the pinned board binary receipt',
+              'elf': elf, 'run_url': os.environ['GITHUB_SERVER_URL'] + '/' + os.environ['GITHUB_REPOSITORY'] + '/actions/runs/' + os.environ['GITHUB_RUN_ID'],
+              'scope': 'Binaries and open-source runtime only. No character, model, reference audio or AXERA SDK. Board UI/audio/NPU inference requires user validation.',
+          }
+          (root / 'build-provenance.json').write_text(json.dumps(record, indent=2) + '\n')
+          lines = [hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + str(p.relative_to(root))
+                   for p in sorted(root.rglob('*')) if p.is_file()]
+          (root / 'SHA256SUMS.txt').write_text('\n'.join(lines) + '\n')
+          PY
+          tar -czf "$AX650_CI_ROOT/DesktopPet-AX650-arm64-binaries.tar.gz" -C "$AX650_CI_ROOT" output
+          (cd "$AX650_CI_ROOT" && sha256sum DesktopPet-AX650-arm64-binaries.tar.gz > DesktopPet-AX650-arm64-binaries.tar.gz.sha256)
+      - name: Upload compiled binaries, runtime and provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: DesktopPet-AX650-arm64-binaries
+          path: |
+            artifacts/local/ax650-ci/DesktopPet-AX650-arm64-binaries.tar.gz
+            artifacts/local/ax650-ci/DesktopPet-AX650-arm64-binaries.tar.gz.sha256
+            artifacts/local/ax650-ci/output/build-provenance.json
+          if-no-files-found: error
+          retention-days: 14

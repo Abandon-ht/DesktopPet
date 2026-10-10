@@ -130,6 +130,12 @@ DesktopPet-AX650-full/
 
 静态打包检查不代替 Rust 角色契约、Mocari 模型加载、语音模型加载或真实设备测试。包和私有资源不公开上传；再分发前需另行核实权利。
 
+## GitHub Actions 编译产物
+
+`ax650` 分支的代码推送会触发 [AX650 ARM64 编译](.github/workflows/ax650-build.yml)。它在 GitHub Ubuntu 22.04 ARM64 环境从锁定源码构建 AXERA sherpa shared 库和三个 release 程序，执行 ABI、GLIBC、依赖与纯回归检查；依赖公开 SDK，无需连接板卡。详细版本和触发命令见 [工具说明](tools/ax650/README.md#github-actions-编译)。
+
+Actions 产物只含程序、开源运行库、许可证、构建记录及摘要，不含角色、模型或板端 SDK，不能作为完整资源包直接启动。CI 原生库是另一次源码构建，与下述私有包的已测试原生库分别记录。该流程不执行真实桌面、麦克风或 NPU 模型推理，不替代用户验收，也不自动上传板端或发布 Release。
+
 ## 上传、预检与完整启动
 
 把归档和摘要传到板端新目录，保留此前成功的测试包。`<board>` 为用户配置的 SSH 主机名：

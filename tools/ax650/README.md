@@ -2,6 +2,16 @@
 
 目标是 Ubuntu 22.04 ARM64 / XFCE X11 上的完整 `desktop-pet`：Tauri 设置和托盘、独立二维角色、养成存档及 CPU / NPU 语音。`desktop-pet-ax650` 仅作为可选文字诊断程序。设计与人工验收见 [AX650 文档](../../docs/26-ax650-edge.md)；角色、音频、模型、私有包和运行数据保持 Git 忽略。
 
+## GitHub Actions 编译
+
+[AX650 工作流](../../.github/workflows/ax650-build.yml) 在 `ax650` 分支的代码或构建工具推送后执行，也提供 `workflow_dispatch`。使用 GitHub 原生 `ubuntu-22.04-arm` 和 Rust 1.95.0；从固定 sherpa revision `5473e19db9c08e63aa41e4c273d9b3f743f1cd25` 编译 AXERA shared C API，SDK 使用公开 `AXERA-TECH/ax650n_bsp_sdk` revision `71ac84128ebc96219a9bd4348a49c43527bc605d`（`v1.45.0_p39`），只用于链接。不需要访问板卡或配置 SSH 密钥。
+
+流程检查 C / Rust ABI、工具回归、纯应用与语音回归，编译完整桌宠、角色宿主和诊断 CLI，并检查 ARM64、GLIBC ≤ 2.35 和直接动态依赖。产物 `DesktopPet-AX650-arm64-binaries` 保留 14 天，包含二进制、sherpa / ONNX Runtime、许可证、源码版本记录和 SHA-256；不包含角色、模型、参考声音或 AXERA SDK，不自动发布 Release。
+
+CI 从源码生成的原生库摘要不同于 `fetch-sherpa.sh` 锁定的板端测试库，构建记录明确区分两者；它不是现有私有完整包的替换包，不自动覆盖板端文件。现有板端导入与私有打包仍使用下面的流程，真实 UI、音频和 NPU 推理由用户验收。
+
+首次可通过 CLI 推送触发：`git push -u origin ax650`。GitHub 要求手动调度入口存在于默认分支；工作流合入默认分支后，可执行 `gh workflow run ax650-build.yml --ref ax650`。查看最近一次结果：`gh run list --workflow ax650-build.yml --branch ax650 --limit 1`。
+
 ## ARM64 构建
 
 Apple Silicon 的 OrbStack 使用原生 ARM64 Ubuntu 22.04。构建上下文只包含工具目录，避免将私有资源发送给镜像构建器：
