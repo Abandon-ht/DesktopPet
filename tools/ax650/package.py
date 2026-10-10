@@ -482,7 +482,8 @@ def package(binaries, avatar, runtime_libs, output, models=None, voice=None, not
             "axera_models": axera_models is not None,
             "sherpa_native": read_json(sherpa_native / "runtime.json") if sherpa_native else None,
             "avatar_license": {key: manifest["license"].get(key) for key in ("status", "redistributable")},
-            "runtime_libraries": [target.name for _, target in libraries if target.parent == Path("lib")],
+            "runtime_libraries": [target.name for _, target in libraries
+                                  if target.parent == Path("lib") and ".so" in target.name],
             "files": {path.relative_to(output).as_posix(): digest(path)
                       for path in sorted(output.rglob("*")) if path.is_file()},
         }
