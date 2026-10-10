@@ -14,6 +14,8 @@ CI 从源码生成的原生库摘要不同于 `fetch-sherpa.sh` 锁定的板端�
 
 手动构建并发布：
 
+GitHub 的手动入口已登记在默认分支 `master`；应用代码和构建工具由 `source_ref` 选择，默认仍为 `ax650`。
+
 ```sh
 gh workflow run ax650-build.yml --ref ax650 \
   -f source_ref=ax650 -f resource_tag=resources-2026-09-29 -f publish_release=true
