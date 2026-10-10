@@ -4,13 +4,23 @@
 
 ## GitHub Actions 编译
 
-[AX650 工作流](../../.github/workflows/ax650-build.yml) 在 `ax650` 分支的代码或构建工具推送后执行，也提供 `workflow_dispatch`。使用 GitHub 原生 `ubuntu-22.04-arm` 和 Rust 1.95.0；从固定 sherpa revision `5473e19db9c08e63aa41e4c273d9b3f743f1cd25` 编译 AXERA shared C API，SDK 使用公开 `AXERA-TECH/ax650n_bsp_sdk` revision `71ac84128ebc96219a9bd4348a49c43527bc605d`（`v1.45.0_p39`），只用于链接。不需要访问板卡或配置 SSH 密钥。
+[AX650 工作流](../../.github/workflows/ax650-build.yml) 仅通过 `workflow_dispatch` 手动触发；推送、PR 或定时器都不触发。使用 GitHub 原生 `ubuntu-22.04-arm` 和 Rust 1.95.0；从固定 sherpa revision `5473e19db9c08e63aa41e4c273d9b3f743f1cd25` 编译 AXERA shared C API，SDK 使用公开 `AXERA-TECH/ax650n_bsp_sdk` revision `71ac84128ebc96219a9bd4348a49c43527bc605d`（`v1.45.0_p39`），只用于链接。不需要访问板卡或配置 SSH 密钥。
 
-流程检查 C / Rust ABI、工具回归、纯应用与语音回归，编译完整桌宠、角色宿主和诊断 CLI，并检查 ARM64、GLIBC ≤ 2.35 和直接动态依赖。产物 `DesktopPet-AX650-arm64-binaries` 保留 14 天，包含二进制、sherpa / ONNX Runtime、许可证、源码版本记录和 SHA-256；不包含角色、模型、参考声音或 AXERA SDK，不自动发布 Release。
+流程检查 C / Rust ABI、工具回归、纯应用与语音回归，编译完整桌宠、角色宿主和诊断 CLI，并检查 ARM64、GLIBC ≤ 2.35 和直接动态依赖。保留代码产物 `DesktopPet-AX650-arm64-binaries`，同时生成 `DesktopPet-AX650-AppImage`，二者保留 14 天。勾选 `publish_release`（默认开启）后，把审核通过的 AppImage、SHA-256 和审计记录发布为 `ax650-v0.1.0-alpha.<run-number>` 预发布版。
+
+AppImage 使用与 Linux x86_64 相同的资源 Release（默认 `resources-2026-09-29`），校验并内置角色、互动语音及 CPU VAD / ASR / TTS / KWS。`appimage.py` 复用 Linux 资源审计，改为 ARM64 sidecar 与 ELF 检查，加入 AX650 软件 GL 启动器和 shared sherpa / ONNX Runtime。发布前移除 linuxdeploy 可能带入的 AXERA SDK 库，保留 `/soc/lib` 链接入口，分别记录编译输入和打包后原生库摘要，并重新提取最终 AppImage 复查资源、架构、GLIBC、启动器及隐私规则。NPU axmodel 不在现有资源 Release 内，使用板端已测试的模型根目录或设置中的 SenseVoice / ZipVoice NPU 目录。用户参考声音和存档不进入发布包。
 
 CI 从源码生成的原生库摘要不同于 `fetch-sherpa.sh` 锁定的板端测试库，构建记录明确区分两者；它不是现有私有完整包的替换包，不自动覆盖板端文件。现有板端导入与私有打包仍使用下面的流程，真实 UI、音频和 NPU 推理由用户验收。
 
-首次可通过 CLI 推送触发：`git push -u origin ax650`。GitHub 要求手动调度入口存在于默认分支；工作流合入默认分支后，可执行 `gh workflow run ax650-build.yml --ref ax650`。查看最近一次结果：`gh run list --workflow ax650-build.yml --branch ax650 --limit 1`。
+手动构建并发布：
+
+```sh
+gh workflow run ax650-build.yml --ref ax650 \
+  -f source_ref=ax650 -f resource_tag=resources-2026-09-29 -f publish_release=true
+gh run list --workflow ax650-build.yml --branch ax650 --limit 1
+```
+
+仅需要 Actions 产物时使用 `-f publish_release=false`。首次代码编译记录已通过；后续编译和发布都由用户手动调度，不因推送自动启动。
 
 ## ARM64 构建
 

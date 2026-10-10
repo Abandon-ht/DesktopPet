@@ -135,6 +135,29 @@ class PublicPackageTests(unittest.TestCase):
             self.prepare()
         self.assertFalse(self.stage.exists())
 
+    def test_arm64_uses_its_own_sidecar_and_architecture_guard(self):
+        for name in ("desktop-pet", "avatar-host-2d"):
+            elf(self.binaries / name, machine=183)
+        elf(self.loader, machine=183)
+        with contextlib.redirect_stdout(io.StringIO()):
+            appimage.prepare(self.binaries, self.stage, self.loader, architecture="aarch64")
+        self.assertTrue((self.stage / "avatar-host-2d-aarch64-unknown-linux-gnu").is_file())
+        metadata = json.loads((self.stage / "resources/release.json").read_text())
+        self.assertEqual(metadata["architecture"], "aarch64")
+        with self.assertRaises(ValueError):
+            appimage.elf_arch(self.binaries / "desktop-pet", "x86_64")
+
+    def test_rejects_board_sdk_and_unapproved_axmodel(self):
+        directory, commit = self.appdir()
+        path = directory / "usr/lib/libax_engine.so"
+        elf(path)
+        with self.assertRaises(ValueError):
+            appimage.audit(directory, commit)
+        path.unlink()
+        (directory / "user-model.axmodel").write_bytes(b"private fixture")
+        with self.assertRaises(ValueError):
+            appimage.audit(directory, commit)
+
     def test_clean_public_tree_passes(self):
         directory, commit = self.appdir()
         self.assertEqual(appimage.audit(directory, commit)["source_commit"], commit)

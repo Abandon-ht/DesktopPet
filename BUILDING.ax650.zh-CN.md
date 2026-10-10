@@ -132,9 +132,20 @@ DesktopPet-AX650-full/
 
 ## GitHub Actions 编译产物
 
-`ax650` 分支的代码推送会触发 [AX650 ARM64 编译](.github/workflows/ax650-build.yml)。它在 GitHub Ubuntu 22.04 ARM64 环境从锁定源码构建 AXERA sherpa shared 库和三个 release 程序，执行 ABI、GLIBC、依赖与纯回归检查；依赖公开 SDK，无需连接板卡。详细版本和触发命令见 [工具说明](tools/ax650/README.md#github-actions-编译)。
+通过 [AX650 手动 AppImage 工作流](.github/workflows/ax650-build.yml) 构建；仅 `workflow_dispatch` 触发，代码推送不会启动新任务。它在 GitHub Ubuntu 22.04 ARM64 环境从锁定源码构建 AXERA sherpa shared 库和三个 release 程序，执行 ABI、GLIBC、依赖与纯回归检查；依赖公开 SDK，无需连接板卡。详细版本和手动触发命令见 [工具说明](tools/ax650/README.md#github-actions-编译)。
 
-Actions 产物只含程序、开源运行库、许可证、构建记录及摘要，不含角色、模型或板端 SDK，不能作为完整资源包直接启动。CI 原生库是另一次源码构建，与下述私有包的已测试原生库分别记录。该流程不执行真实桌面、麦克风或 NPU 模型推理，不替代用户验收，也不自动上传板端或发布 Release。
+`DesktopPet-AX650-arm64-binaries` 仅包含代码和原生库；`DesktopPet-AX650-AppImage` 内置选定 Release 中的角色、互动音频和 CPU 语音模型。启用 `publish_release` 后，AppImage、摘要和审计记录发布到 AX650 预发布版。CI 原生库是另一次源码构建，与下述私有包的已测试原生库分别记录。该流程不执行真实桌面、麦克风或 NPU 模型推理，不替代用户验收，也不自动上传板端。发布包不含 AXERA SDK、用户参考声音或存档。
+
+下载 `DesktopPet-AX650-aarch64.AppImage` 后，在板端现有 XFCE 终端启动：
+
+```sh
+chmod +x DesktopPet-AX650-aarch64.AppImage
+./DesktopPet-AX650-aarch64.AppImage
+# FUSE 不可用时：
+./DesktopPet-AX650-aarch64.AppImage --appimage-extract-and-run
+```
+
+AppImage 自动启用 AX650 软件 GL / WebKit 软件合成，首次角色大小 64%、调度预算 20 fps；系统须提供 `/soc/lib` 中匹配的 AXERA SDK。语音默认关闭且仅识别；需要 TTS 配置时切换“识别、对话与朗读”。现有资源 Release 只包含 CPU 模型；NPU 使用已经上传并测试的模型目录，在高级设置分别选择 SenseVoice / ZipVoice NPU 目录，或把共享模型根目录指向完整的 CPU / NPU 模型集合。存档位于普通用户应用数据目录，不写入 AppImage。
 
 ## 上传、预检与完整启动
 

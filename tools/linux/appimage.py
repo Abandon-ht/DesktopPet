@@ -14,7 +14,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 RESOURCE_NAMES = {"show-settings-on-launch", "voice-settings.json", "release.json"}
-FORBIDDEN_SUFFIXES = {".moc3", ".onnx", ".gguf", ".safetensors", ".pfx", ".pem"}
+FORBIDDEN_SUFFIXES = {".moc3", ".onnx", ".axmodel", ".gguf", ".safetensors", ".pfx", ".pem"}
+ELF_MACHINES = {"x86_64": 62, "aarch64": 183}
 ARCHIVES = ("avatar.zip", "voice.zip", "models-vad.zip", "models-asr.zip", "models-tts.zip", "models-kws.zip")
 
 
@@ -62,14 +63,14 @@ def unpack_resources(assets, resources):
     return inventory, {name: checks[name] for name in ARCHIVES}
 
 
-def elf_x64(path):
+def elf_arch(path, architecture="x86_64"):
     with path.open("rb") as stream:
         header = stream.read(20)
-    if len(header) < 20 or header[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", header, 18)[0] != 62:
-        raise ValueError(f"expected Linux x86_64 ELF: {path}")
+    if len(header) < 20 or header[:6] != b"\x7fELF\x02\x01" or struct.unpack_from("<H", header, 18)[0] != ELF_MACHINES[architecture]:
+        raise ValueError(f"expected Linux {architecture} ELF: {path}")
 
 
-def prepare(binaries, output, vulkan_loader, assets=None, resource_tag=None):
+def prepare(binaries, output, vulkan_loader, assets=None, resource_tag=None, architecture="x86_64"):
     output = output.resolve()
     if output.exists():
         raise ValueError("staging output must be a new directory")
@@ -78,8 +79,8 @@ def prepare(binaries, output, vulkan_loader, assets=None, resource_tag=None):
     ).returncode:
         raise ValueError("staging inside the checkout must be ignored by Git")
     for name in ("desktop-pet", "avatar-host-2d"):
-        elf_x64(binaries / name)
-    elf_x64(vulkan_loader)
+        elf_arch(binaries / name, architecture)
+    elf_arch(vulkan_loader, architecture)
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     output.mkdir(parents=True)
     resources = output / "resources"
@@ -95,12 +96,12 @@ def prepare(binaries, output, vulkan_loader, assets=None, resource_tag=None):
         greeting_dir="@desktop-pet-resources/voice" if assets else ""
     ), indent=2) + "\n")
     (resources / "release.json").write_text(json.dumps(dict(
-        source_commit=commit, architecture="x86_64", base_system="Ubuntu 22.04",
+        source_commit=commit, architecture=architecture, base_system="Ubuntu 22.04",
         desktop="X11 experimental; native Wayland unsupported; XWayland unvalidated",
         bundled_character=bool(assets), bundled_voice_models=bool(assets),
         resource_tag=resource_tag, resource_archives=archives, resource_files=inventory
     ), indent=2) + "\n")
-    sidecar = output / "avatar-host-2d-x86_64-unknown-linux-gnu"
+    sidecar = output / f"avatar-host-2d-{architecture}-unknown-linux-gnu"
     shutil.copy2(binaries / "avatar-host-2d", sidecar)
     sidecar.chmod(0o755)
     notices = output / "notices"
@@ -144,7 +145,7 @@ This alpha is not a promise of compatibility with every Linux distribution.
     print(config_path)
 
 
-def audit(appdir, expected_commit):
+def audit(appdir, expected_commit, architecture="x86_64"):
     resources = appdir / "usr/bin/resources"
     metadata = json.loads((resources / "release.json").read_text())
     inventory = metadata["resource_files"]
@@ -152,7 +153,7 @@ def audit(appdir, expected_commit):
     expected = RESOURCE_NAMES | inventory.keys()
     if actual != expected:
         raise ValueError(f"unexpected public resources: {actual ^ expected}")
-    if metadata["source_commit"] != expected_commit:
+    if metadata["source_commit"] != expected_commit or metadata["architecture"] != architecture:
         raise ValueError("release provenance mismatch")
     if metadata["bundled_character"]:
         if set(metadata["resource_archives"]) != set(ARCHIVES) or not metadata["bundled_voice_models"] or "avatar/manifest.json" not in inventory:
@@ -170,10 +171,10 @@ def audit(appdir, expected_commit):
         if path.is_symlink() and (os.path.isabs(os.readlink(path)) or not path.resolve().is_relative_to(appdir.resolve())):
             raise ValueError(f"unsafe AppDir symlink: {relative}")
         approved_asset = path.is_relative_to(resources) and path.relative_to(resources).as_posix() in inventory
-        if (path.suffix.lower() in FORBIDDEN_SUFFIXES and not approved_asset) or path.name.startswith((".env", "id_ed25519", "id_rsa", "libnvidia", "libcuda")) or path.name in ("dev-data-dir.txt", "care.sqlite3", "preferences.json", "placement.json", "nvidia_icd.json"):
+        if (path.suffix.lower() in FORBIDDEN_SUFFIXES and not approved_asset) or path.name.startswith((".env", "id_ed25519", "id_rsa", "libnvidia", "libcuda", "libax_")) or path.name in ("dev-data-dir.txt", "care.sqlite3", "preferences.json", "placement.json", "nvidia_icd.json"):
             raise ValueError(f"private data, assets or GPU driver in public AppDir: {relative}")
     for name in ("desktop-pet", "avatar-host-2d"):
-        elf_x64(appdir / "usr/bin" / name)
+        elf_arch(appdir / "usr/bin" / name, architecture)
     if not (appdir / "AppRun").is_file() or not os.access(appdir / "AppRun", os.X_OK):
         raise ValueError("AppRun is missing or not executable")
     if not list(appdir.rglob("libvulkan.so.1")) or not list(appdir.rglob("WebKitWebProcess")) or not list(appdir.rglob("WebKitNetworkProcess")):
@@ -181,8 +182,8 @@ def audit(appdir, expected_commit):
     return metadata
 
 
-def verify(image, expected_commit, report):
-    elf_x64(image)
+def verify(image, expected_commit, report, architecture="x86_64", extra_audit=None):
+    elf_arch(image, architecture)
     with image.open("rb") as stream:
         stream.seek(8)
         if stream.read(3) != b"AI\x02":
@@ -191,7 +192,8 @@ def verify(image, expected_commit, report):
         subprocess.run([str(image.resolve()), "--appimage-extract"], cwd=temp,
                        stdout=subprocess.DEVNULL, check=True)
         appdir = Path(temp) / "squashfs-root"
-        metadata = audit(appdir, expected_commit)
+        metadata = audit(appdir, expected_commit, architecture)
+        extra_checks = extra_audit(appdir, metadata) if extra_audit else None
         abi = {}
         for name in ("desktop-pet", "avatar-host-2d"):
             output = subprocess.check_output(["readelf", "--version-info", str(appdir / "usr/bin" / name)], text=True)
@@ -203,6 +205,8 @@ def verify(image, expected_commit, report):
         result = dict(passed=True, source=metadata, maximum_glibc_symbols=abi,
                       sha256=digest(image),
                       scope="extracted AppImage architecture, helpers, ABI, resources and privacy; no GPU/Wayland acceptance")
+        if extra_checks is not None:
+            result["extra_checks"] = extra_checks
         report.write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result))
 
@@ -215,18 +219,21 @@ def main():
     stage.add_argument("--output", required=True, type=Path)
     stage.add_argument("--assets-dir", type=Path)
     stage.add_argument("--resource-tag")
-    stage.add_argument("--vulkan-loader", default=Path("/usr/lib/x86_64-linux-gnu/libvulkan.so.1"), type=Path)
+    stage.add_argument("--architecture", choices=ELF_MACHINES, default="x86_64")
+    stage.add_argument("--vulkan-loader", type=Path)
     check = sub.add_parser("verify")
     check.add_argument("--image", required=True, type=Path)
     check.add_argument("--expected-commit", required=True)
     check.add_argument("--report", required=True, type=Path)
+    check.add_argument("--architecture", choices=ELF_MACHINES, default="x86_64")
     args = parser.parse_args()
     if args.command == "prepare":
         if bool(args.assets_dir) != bool(args.resource_tag):
             parser.error("--assets-dir and --resource-tag must be provided together")
-        prepare(args.binaries.resolve(), args.output, args.vulkan_loader, args.assets_dir, args.resource_tag)
+        loader = args.vulkan_loader or Path(f"/usr/lib/{args.architecture}-linux-gnu/libvulkan.so.1")
+        prepare(args.binaries.resolve(), args.output, loader, args.assets_dir, args.resource_tag, args.architecture)
     else:
-        verify(args.image, args.expected_commit, args.report)
+        verify(args.image, args.expected_commit, args.report, args.architecture)
 
 
 if __name__ == "__main__":
