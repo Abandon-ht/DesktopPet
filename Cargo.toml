@@ -2,6 +2,7 @@
 members = [
     "apps/desktop",
     "apps/avatar-host-2d",
+    "apps/ax650",
     "crates/pet-core",
     "crates/pet-protocol",
     "crates/pet-ipc",

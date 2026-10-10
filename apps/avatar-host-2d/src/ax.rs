@@ -41,8 +41,13 @@ impl Probe {
         let following_changed_worker = following_changed.clone();
         let revision_worker = revision.clone();
         let worker = std::thread::spawn(move || {
-            let mut focused = native::FocusedProbe::default();
-            let mut observer = native::WindowObserver::default();
+            #[cfg(target_os = "macos")]
+            let (mut focused, mut observer) = (
+                native::FocusedProbe::default(),
+                native::WindowObserver::default(),
+            );
+            #[cfg(not(target_os = "macos"))]
+            let (mut focused, mut observer) = (native::FocusedProbe, native::WindowObserver);
             let mut next_poll = Instant::now();
             let mut last_sample = Instant::now() - Duration::from_millis(33);
             while !stop_worker.load(Ordering::Acquire) {

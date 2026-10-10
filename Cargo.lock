@@ -1089,6 +1089,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "desktop-pet-ax650"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "avatar-pack",
+ "libc",
+ "pet-core",
+ "pet-ipc",
+ "pet-persistence",
+ "pet-protocol",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

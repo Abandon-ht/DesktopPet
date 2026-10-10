@@ -8,6 +8,7 @@ mod input;
 mod metrics;
 mod placement;
 mod platform;
+mod render_config;
 mod snap;
 mod window;
 #[cfg(target_os = "linux")]

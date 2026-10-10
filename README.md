@@ -1,6 +1,6 @@
 # DesktopPet：架构与分阶段开发设计
 
-English: [README.en.md](README.en.md) · macOS 构建：[中文](BUILDING.zh-CN.md) / [English](BUILDING.md) · Windows 构建准备：[中文](BUILDING.windows.zh-CN.md) / [English](BUILDING.windows.md) · Linux 构建准备：[中文](BUILDING.linux.zh-CN.md) / [English](BUILDING.linux.md) · [资源来源 / Asset provenance](docs/ASSETS.md) · [使用与版权说明 / Use and copyright](POLICY.md)
+English: [README.en.md](README.en.md) · macOS 构建：[中文](BUILDING.zh-CN.md) / [English](BUILDING.md) · Windows 构建准备：[中文](BUILDING.windows.zh-CN.md) / [English](BUILDING.windows.md) · Linux 构建准备：[中文](BUILDING.linux.zh-CN.md) / [English](BUILDING.linux.md) · [AX650 构建与测试](BUILDING.ax650.zh-CN.md) · [资源来源 / Asset provenance](docs/ASSETS.md) · [使用与版权说明 / Use and copyright](POLICY.md)
 
 Contributors and users must not use this project to create or distribute sexualized content involving minors or minor-presenting characters.
 
@@ -35,8 +35,11 @@ Contributors and users must not use this project to create or distribute sexuali
 | [长期记忆](docs/23-long-term-memory.md) | 跨会话存储、自动提取与压缩、召回、用户管理和验收边界 |
 | [P3-W 联网查询与受限 Agent](docs/24-p3-web-agent.md) | 搜索服务、只读工具循环、来源展示、测试方式与当前限制 |
 | [Linux X11 第一阶段](docs/25-linux-x11-implementation.md) | 离线构建、RTX 5090 透明窗口、原生输入与屏幕存档的实测边界 |
+| [AX650 端侧实现](docs/26-ax650-edge.md) | ARM64 软件 GL、无语音 Rust 主程序、养成存档、用户测试与后续加速规划 |
 
 Linux X11 的首次构建与单屏透明角色交互已在 Ubuntu 22.04 / xfwm4 / RTX 5090 验证；已补齐当前 XFCE 的真实托盘，并提供无语音私有交互测试包工具和手动 AppImage 预发布工作流；这是实验开发基线，完整设置交互、语音和通用安装包仍需后续验收，见 [Linux 开发记录](docs/25-linux-x11-implementation.md)。
+
+`ax650` 分支基于 Linux X11，面向无通用着色器 GPU 的 AX650N / Ubuntu 22.04 ARM64 板卡。第一阶段使用 `apps/ax650` 原生 Rust 主程序、独立角色宿主和 CPU 软件 OpenGL，复用养成与 SQLite 存档；此前私有包已由用户确认小尺寸角色可见，本分支的新交互和存档需独立验收，不要求稳定 30 fps。构建及用户手动测试见 [AX650 说明](BUILDING.ax650.zh-CN.md)。
 
 关键结论：
 

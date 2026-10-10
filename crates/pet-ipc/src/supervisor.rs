@@ -29,11 +29,20 @@ pub struct Host {
 
 impl Host {
     pub fn start(command: &mut Command, timeout: Duration) -> Result<Self> {
+        Self::start_with_stderr(command, timeout, Stdio::inherit())
+    }
+
+    /// Keep protocol stdout separate from a caller-owned diagnostic log.
+    pub fn start_with_stderr(
+        command: &mut Command,
+        timeout: Duration,
+        stderr: Stdio,
+    ) -> Result<Self> {
         ensure!(!timeout.is_zero(), "timeout must be positive");
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(stderr)
             .spawn()
             .context("spawn host")?;
         let mut input = child.stdin.take().context("missing stdin")?;

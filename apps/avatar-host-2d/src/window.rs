@@ -369,7 +369,7 @@ impl ApplicationHandler<Control> for AvatarHost {
             let now = Instant::now();
             if now >= overlay.next_frame {
                 overlay.window.request_redraw();
-                overlay.next_frame = now + Duration::from_secs_f64(1. / 30.);
+                overlay.next_frame = now + overlay.frame_interval;
             }
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 overlay.next_frame.min(
@@ -402,9 +402,9 @@ impl ApplicationHandler<Control> for AvatarHost {
         state.ax_probe.set_following(state.external_snap.attached());
         if now >= state.next_frame {
             state.window.request_redraw();
-            state.next_frame += Duration::from_secs_f64(1. / 30.);
+            state.next_frame += state.frame_interval;
             if state.next_frame <= now {
-                state.next_frame = now + Duration::from_secs_f64(1. / 30.);
+                state.next_frame = now + state.frame_interval;
             }
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(
@@ -579,6 +579,7 @@ struct State {
     transform: WgpuTransform,
     composite: crate::composite::Composite,
     next_frame: Instant,
+    frame_interval: Duration,
     input: crate::input::Input,
     dynamic_input: bool,
     #[cfg(target_os = "linux")]
@@ -601,6 +602,7 @@ impl State {
         overlay_mode: bool,
     ) -> Result<Self> {
         let started = Instant::now();
+        let frame_interval = crate::render_config::frame_interval()?;
         #[cfg(target_os = "linux")]
         crate::x11::pointer_only(&window)?;
         #[cfg(target_os = "linux")]
@@ -631,8 +633,26 @@ impl State {
         #[cfg(not(target_os = "linux"))]
         let verified_x11 = false;
         let info = adapter.get_info();
-        config.alpha_mode =
-            crate::alpha::select(&caps.alpha_modes, info.backend, info.vendor, verified_x11)?;
+        pet_ipc::event_log!(
+            "{}",
+            json!({"event":"surface_capabilities",
+            "backend":format!("{:?}",info.backend),"adapter":info.name,
+            "alpha_modes":format!("{:?}",caps.alpha_modes),"format":format!("{:?}",config.format)})
+        );
+        #[cfg(target_os = "linux")]
+        let verified_gl_x11 = info.backend == wgpu::Backend::Gl
+            && std::env::var("DESKTOPPET_X11_GL_ALPHA").as_deref() == Ok("1")
+            && caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::Opaque)
+            && crate::x11::alpha_visual_with_compositor(&window)?;
+        #[cfg(not(target_os = "linux"))]
+        let verified_gl_x11 = false;
+        config.alpha_mode = crate::alpha::select(
+            &caps.alpha_modes,
+            info.backend,
+            info.vendor,
+            verified_x11,
+            verified_gl_x11,
+        )?;
         if config.alpha_mode == wgpu::CompositeAlphaMode::Opaque {
             pet_ipc::event_log!(
                 "{}",
@@ -788,7 +808,7 @@ impl State {
         window.set_cursor_hittest(!passthrough)?;
         pet_ipc::event_log!(
             "{}",
-            json!({"event": "ready", "adapter": format!("{:?}", adapter.get_info()), "alpha_modes": format!("{:?}", caps.alpha_modes), "selected_alpha": format!("{:?}", config.alpha_mode), "format": format!("{:?}", config.format), "initialization_ms": started.elapsed().as_secs_f64() * 1000., "monitors": monitors, "passthrough": passthrough, "ax_trusted": crate::platform::ax_trusted(), "clipping_contexts": plan.contexts().len()})
+            json!({"event": "ready", "adapter": format!("{:?}", adapter.get_info()), "alpha_modes": format!("{:?}", caps.alpha_modes), "selected_alpha": format!("{:?}", config.alpha_mode), "format": format!("{:?}", config.format), "initialization_ms": started.elapsed().as_secs_f64() * 1000., "monitors": monitors, "passthrough": passthrough, "ax_trusted": crate::platform::ax_trusted(), "clipping_contexts": plan.contexts().len(), "max_fps": 1.0 / frame_interval.as_secs_f64()})
         );
         let layout_path = if overlay_mode {
             None
@@ -853,6 +873,7 @@ impl State {
             transform,
             composite,
             next_frame: Instant::now(),
+            frame_interval,
             input: crate::input::Input::default(),
             dynamic_input,
             #[cfg(target_os = "linux")]
@@ -1497,13 +1518,18 @@ impl Drop for State {
             "{}",
             serde_json::json!({"event":"render_metrics","metrics":report})
         );
+        let metrics_path = std::env::var_os("DESKTOPPET_METRICS")
+            .map(PathBuf::from)
+            .or_else(|| {
+                self.layout_path
+                    .as_ref()
+                    .map(|path| path.with_file_name("render-metrics.json"))
+            });
         if report["presented_frames"].as_u64().unwrap_or(0) > 0
-            && let Some(path) = &self.layout_path
+            && let Some(path) = metrics_path
+            && let Ok(bytes) = serde_json::to_vec_pretty(&report)
         {
-            let path = path.with_file_name("render-metrics.json");
-            if let Ok(bytes) = serde_json::to_vec_pretty(&report) {
-                let _ = std::fs::write(path, bytes);
-            }
+            let _ = std::fs::write(path, bytes);
         }
     }
 }
