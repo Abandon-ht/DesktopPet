@@ -22,6 +22,8 @@ APPLICATION_LIBRARIES = (
     "libgtk-3.so.0", "libgdk-3.so.0", "libwebkit2gtk-4.1.so.0",
     "libjavascriptcoregtk-4.1.so.0", "libsoup-3.0.so.0",
     "libayatana-appindicator3.so.1", "libasound.so.2", "libxdo.so.3",
+    "libsherpa-onnx-c-api.so", "libonnxruntime.so",
+    "libax_engine.so", "libax_sys.so", "libax_interpreter.so",
 )
 
 

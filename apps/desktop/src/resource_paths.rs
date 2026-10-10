@@ -5,14 +5,16 @@ use std::path::{Path, PathBuf};
 
 const BUNDLE_PREFIX: &str = "@desktop-pet-resources";
 
-fn paths(settings: &mut VoiceSettings) -> [&mut PathBuf; 12] {
+fn paths(settings: &mut VoiceSettings) -> [&mut PathBuf; 14] {
     [
         &mut settings.model_dir,
         &mut settings.asr_model_path,
+        &mut settings.asr_axera_model_dir,
         &mut settings.asr_ncnn_model_dir,
         &mut settings.asr_ncnn_executable,
         &mut settings.asr_mlx_model_dir,
         &mut settings.tts_model_dir,
+        &mut settings.tts_axera_model_dir,
         &mut settings.kokoro_model_dir,
         &mut settings.vad_model_path,
         &mut settings.kws_model_dir,
@@ -85,6 +87,8 @@ mod tests {
             greeting_dir: old_resources.join("voice"),
             reference_audio: old_resources.join("voice/reference.wav"),
             asr_model_path: custom.clone(),
+            asr_axera_model_dir: old_resources.join("models/axera/sensevoice"),
+            tts_axera_model_dir: old_resources.join("models/axera/zipvoice"),
             ..VoiceSettings::default()
         };
         let portable = for_storage(&original, &old_resources);
@@ -105,6 +109,14 @@ mod tests {
             new_resources.join("voice/reference.wav")
         );
         assert_eq!(loaded.asr_model_path, custom);
+        assert_eq!(
+            loaded.asr_axera_model_dir,
+            new_resources.join("models/axera/sensevoice")
+        );
+        assert_eq!(
+            loaded.tts_axera_model_dir,
+            new_resources.join("models/axera/zipvoice")
+        );
         assert_eq!(
             for_runtime_path(&portable_avatar, &new_resources),
             new_resources.join("avatar/manifest.json")

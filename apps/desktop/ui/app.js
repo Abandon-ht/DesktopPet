@@ -20,9 +20,9 @@ const voiceMessage = document.querySelector('#voice-message');
 const voicePhases = {idle:'待机', starting:'准备中', listening:'聆听中', recognizing:'识别中', thinking:'生成回复', searching:'联网查询中', synthesizing:'合成语音', speaking:'播放中', faulted:'需要处理'};
 const voiceFields = {
   enabled:'voice-enabled', mode:'voice-mode', input_device_name:'voice-input-device', asr_backend:'voice-asr-backend', llm_backend:'voice-llm-backend', tts_backend:'voice-tts-backend',
-  model_dir:'voice-model-dir', asr_model_path:'voice-asr-model-path', asr_threads:'voice-asr-threads', asr_gpu:'voice-asr-gpu',
+  model_dir:'voice-model-dir', asr_model_path:'voice-asr-model-path', asr_threads:'voice-asr-threads', asr_npu:'voice-asr-npu', asr_axera_model_dir:'voice-asr-axera-model-dir',
   asr_ncnn_model_dir:'voice-asr-ncnn-model-dir', asr_ncnn_executable:'voice-asr-ncnn-executable', asr_ncnn_threads:'voice-asr-ncnn-threads', asr_ncnn_gpu:'voice-asr-ncnn-gpu',
-  tts_model_dir:'voice-tts-model-dir', tts_threads:'voice-tts-threads', tts_gpu:'voice-tts-gpu', tts_speaker:'voice-tts-speaker', tts_service_url:'voice-tts-service-url',
+  tts_model_dir:'voice-tts-model-dir', tts_threads:'voice-tts-threads', tts_npu:'voice-tts-npu', tts_axera_model_dir:'voice-tts-axera-model-dir', tts_speaker:'voice-tts-speaker', tts_service_url:'voice-tts-service-url',
   kokoro_model_dir:'voice-kokoro-model-dir', kokoro_threads:'voice-kokoro-threads', kokoro_gpu:'voice-kokoro-gpu',
   vad_model_path:'voice-vad-model-path', vad_threshold:'voice-vad-threshold', vad_silence_ms:'voice-vad-silence', no_speech_timeout_secs:'voice-no-speech-timeout', rest_after_inactive_minutes:'voice-rest-inactive',
   aec_enabled:'voice-aec-enabled', kws_enabled:'voice-kws-enabled', kws_model_dir:'voice-kws-model-dir', kws_keyword:'voice-kws-keyword', kws_keyword_en:'voice-kws-keyword-en', kws_keywords_file:'voice-kws-keywords-file', kws_threshold:'voice-kws-threshold', kws_threads:'voice-kws-threads',
@@ -38,13 +38,22 @@ function renderVoiceProviders() {
     const [kind, value] = panel.dataset.providerFor.split(':');
     panel.hidden = (kind === 'asr' ? asr : tts) !== value;
   }
+  for (const kind of ['asr', 'tts']) {
+    const npu = voiceInput(`${kind}_npu`).checked;
+    document.querySelector(`[data-${kind}-cpu-model]`).hidden = npu;
+    document.querySelector(`[data-${kind}-npu-model]`).hidden = !npu;
+  }
   const transcription = voiceInput('mode').value === 'transcription';
   for (const panel of document.querySelectorAll('[data-voice-conversation-only]')) panel.hidden = transcription;
   const planned = !transcription && (tts !== 'sherpa_onnx' || ['anthropic','gemini'].includes(llm));
   document.querySelector('#voice-provider-note').textContent = planned ? t('所选后端处于规划阶段，当前可以查看和填写参数；启用语音前仍需切回已接入的后端。') : '';
   document.querySelector('#voice-start').disabled = planned || !voiceInput('enabled').checked;
 }
-for (const key of ['mode','asr_backend','tts_backend','llm_backend','enabled']) voiceInput(key).addEventListener('change', renderVoiceProviders);
+for (const key of ['mode','asr_backend','tts_backend','llm_backend','enabled','asr_npu','tts_npu']) voiceInput(key).addEventListener('change', renderVoiceProviders);
+for (const kind of ['asr', 'tts']) voiceInput(`${kind}_backend`).addEventListener('change', () => {
+  if (voiceInput(`${kind}_backend`).value !== 'sherpa_onnx') voiceInput(`${kind}_npu`).checked = false;
+  renderVoiceProviders();
+});
 document.querySelector('#voice-input-refresh').addEventListener('click', async () => {
   try {
     const names = await invoke('voice_input_devices');
@@ -65,7 +74,8 @@ voiceInput('llm_backend').addEventListener('change', () => {
 });
 async function refreshVoiceSettings() {
   try {
-    const settings = await invoke('voice_settings');
+    const [settings, npuAvailable] = await Promise.all([invoke('voice_settings'), invoke('voice_npu_available')]);
+    for (const kind of ['asr', 'tts']) voiceInput(`${kind}_npu`).disabled = !npuAvailable;
     for (const [key, id] of Object.entries(voiceFields)) {
       const input = document.getElementById(id);
       if (input.type === 'checkbox') input.checked = Boolean(settings[key]);

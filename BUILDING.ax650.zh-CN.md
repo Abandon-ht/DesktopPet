@@ -8,13 +8,17 @@
 
 在 Mac 的 OrbStack 中使用同版本原生 ARM64 Ubuntu，Rust 固定为仓库 `rust-toolchain.toml` 的 1.95.0，Cargo 依赖使用 `Cargo.lock`。完整构建环境包括 GTK / WebKitGTK、Ayatana AppIndicator、XDO、ALSA，以及角色宿主的 X11 / GL 依赖。
 
-先下载并校验官方 sherpa-onnx 1.13.8 ARM64 CPU 静态库。归档保存在忽略目录，不提交到 Git：
+语音运行库改用已测试的 `zipvoice-axera` 分支，固定 Git revision `5473e19db9c08e63aa41e4c273d9b3f743f1cd25`。来源为 [sherpa-onnx 分支](https://github.com/Abandon-ht/sherpa-onnx/tree/5473e19db9c08e63aa41e4c273d9b3f743f1cd25)，账号仅表示仓库来源，模型仍称 SenseVoice 和 ZipVoice。原生库为 AXERA-enabled shared C API，加上 ONNX Runtime；官方 CPU 静态归档不能替代该构建。
+
+复用板端另一会话已编译并测试的原生库，缓存和 SDK 保存在忽略目录：
 
 ```sh
-bash tools/ax650/fetch-sherpa.sh artifacts/local/ax650-native
+bash tools/ax650/fetch-sherpa.sh artifacts/local/ax650-native ax650
 ```
 
-脚本固定 `sherpa-onnx-v1.13.8-linux-aarch64-static-lib.tar.bz2`，SHA-256 为 `77983e3cf29aa60f2e531d249dbd01d15596530550c8db2e9e02fc6a655da6bb`，解包后检查需要的静态库。这个原生运行时不包含 ASR / TTS 模型权重。
+此脚本仅复制库、C 接口头、许可证和链接所需 `/soc/lib` SDK，不运行模型或安装软件。默认读取板端 `/root/Sherpa-ZipVoice-AXERA-PR`，可用 `AX650_SHERPA_BUILD_ROOT` 指定已有构建目录。`native-runtime.py` 固定 shared C API / ONNX Runtime / 头文件 SHA-256，保留 `runtime.json`；不同二进制拒绝复用。SDK 只用于构建链接，交付时继续使用板上 `/soc/lib`。版本字符串仍为 1.13.8，实际构建身份由 Git revision、源码与库摘要确定。
+
+该分支 C API 新增了 offline CTC 配置字段，Rust 绑定未同步。`vendor/zipvoice-axera` 保留该 revision 的两个 Rust crate 和 Apache-2.0 许可证，仅补齐此字段并初始化为空；具体修正见 [绑定说明](vendor/zipvoice-axera/README.md)。构建前自动比较 C / Rust 的 12 个配置结构大小、对齐和全部字段偏移，避免用旧结构调用新库。其他平台继续静态链接，新增尾部零字段由旧 API 忽略。
 
 从仓库根目录构建并运行完整构建镜像；镜像上下文仅为工具目录：
 
@@ -29,7 +33,7 @@ docker --context orbstack build --platform linux/arm64 \
 docker --context orbstack run --rm --platform linux/arm64 \
   -v "$PWD:/workspace" -v "$ax650_target:/target" \
   -v "$ax650_cargo:/cargo" -v "$ax650_native:/native:ro" \
-  -e SHERPA_ONNX_LIB_DIR=/native/sherpa-onnx-v1.13.8-linux-aarch64-static-lib/lib \
+  -e SHERPA_ONNX_LIB_DIR=/native/lib \
   desktoppet-ax650-desktop-build:20261010
 ```
 
@@ -52,6 +56,24 @@ docker --context orbstack run --rm --platform linux/arm64 \
 
 本次完整资源包可携带 VAD / ASR / TTS / KWS；初始只配置“仅识别并显示文字”，不自动打开麦克风或可选服务。仅识别模式不加载 TTS，也不要求 LLM 或参考 WAV。模型来源与下载入口见 [语音流水线](docs/19-p3-voice-pipeline.md) 和 [KWS 配置](docs/20-p3-voice-settings-and-greetings.md)。
 
+NPU 根目录通过 `--axera-models` 显式指定，准备以下布局：
+
+```text
+sensevoice/sensevoice.axmodel  # 已测试的 AX650 10 秒模型，打包时统一命名
+sensevoice/tokens.txt         # 必须来自同一个模型 revision
+zipvoice/encoder.axmodel
+zipvoice/decoder4_split_manifest.json
+zipvoice/decoder_part0.axmodel ... decoder_part3.axmodel
+zipvoice/vocos_full.axmodel
+zipvoice/tokens.txt
+zipvoice/lexicon.txt
+zipvoice/espeak-ng-data/
+```
+
+SenseVoice 来源为 [SenseVoiceSmall-axmodel](https://huggingface.co/Abandon-ht/SenseVoiceSmall-axmodel/tree/7cf51476f6236f5dd81f08d9df533483e6845c2f)，选择 `ax650/model-10-seconds.axmodel`，改包内名为 `sensevoice.axmodel`，同时携带该 revision 的 tokens。ZipVoice 来源为 [ZipVoice.AXERA](https://huggingface.co/AXERA-TECH/ZipVoice.AXERA/tree/aa48d14426f528a63ccb0720edb79651597e5316)，选择 `models/zipvoice_distill_ax650/`、`models/vocoder/vocos_full.axmodel` 和 `resources/zipvoice_hf/zipvoice/tokens.txt`，配合已测试前端。HF CLI 校验所选原仓库文件，附上 README / LICENSE / provenance，清单则按已测试布局保留。不要把其他 SenseVoice 导出的模型与这个词表混用。
+
+默认 NPU 开关关闭，勾选后解析包内 `resources/models/axera/sensevoice` 或 `axera/zipvoice`；取消勾选恢复原 CPU 路径。CPU / NPU 自定义路径各自保存，不改写用户旧线程值。NPU ZipVoice distill 使用 version 1 清单、4 steps、guidance 3.0；已测试的 standard version 2 清单可通过自定义 NPU 目录选择，自动改为 10 steps、guidance 1.0。打包器验证四段文件与清单引用；当前包默认仅带 distill。线程默认 2 / 4 控制 CPU 工作预算，NPU 本身不按此值分配核数，VAD / KWS 仍用 CPU。
+
 此前板端缺少 XKB 运行库，完整应用检查又发现需要补齐 `libxdo.so.3`。从同版本构建镜像准备三个私有库与 Ubuntu 包版权文件：
 
 ```sh
@@ -71,7 +93,7 @@ done
 docker --context orbstack rm "$ax650_container"
 ```
 
-`docker cp -L` 把软件包库的符号链接解引用为普通文件。私有库不替换系统 Mesa / GL / EGL 驱动；GTK / WebKit / AppIndicator / ALSA 等仍由板端匹配系统提供。`--runtime-libs` 可省略，但省略时板端必须已具备相应库。
+`docker cp -L` 把软件包库的符号链接解引用为普通文件。私有库不替换系统 Mesa / GL / EGL 驱动；GTK / WebKit / AppIndicator / ALSA 等仍由板端匹配系统提供。`--runtime-libs` 可省略，但省略时板端必须已具备相应库。`--sherpa-native` 必须传入验证后的缓存；打包器只加入 shared C API、ONNX Runtime、许可证和摘要，不复制 AXERA SDK。
 
 制作新目录中的完整包：
 
@@ -81,6 +103,8 @@ python3 tools/ax650/package.py \
   --avatar /absolute/private-avatar/manifest.json \
   --models /absolute/private-models \
   --full-voice-models \
+  --axera-models /absolute/staged-axera-models \
+  --sherpa-native artifacts/local/ax650-native \
   --voice /absolute/private-interaction-voice \
   --notices /absolute/private-resource-notices \
   --runtime-libs artifacts/local/ax650-full-build/runtime-lib \
@@ -123,7 +147,7 @@ sha256sum --check SHA256SUMS.txt
 ./run.sh --check-only
 ```
 
-完整预检加载 X11 / XKB、所选图形后端、GTK / WebKitGTK、AppIndicator、ALSA 和 XDO 相关库与必要符号；不连接显示、不创建窗口、不打开麦克风。通过只代表库可加载，不证明会话授权、托盘宿主、软件驱动、角色或 ASR 成功。
+完整预检加载 X11 / XKB、所选图形后端、GTK / WebKitGTK、AppIndicator、ALSA、XDO、shared sherpa-onnx / ONNX Runtime 和板上 AXERA SDK 库与必要符号；不连接显示、不创建窗口、不打开麦克风。通过只代表库可加载，不证明会话授权、托盘宿主、软件驱动、角色或 ASR 成功。
 
 在板端现有 XFCE 终端启动完整桌宠：
 
@@ -156,7 +180,7 @@ SSH 启动仍连接既有 X11 / XFCE 会话：保留正确的 `DISPLAY`、`XAUTH
 Audio 卡片新增语音模式与麦克风选择。先验证独立识别，无需启动 LLM 或准备 TTS 参考声音：
 
 1. 接入麦克风，在 Audio 点击“刷新麦克风”，选择列出的精确设备名称；刷新只枚举名称，不开始采集。留空表示系统默认输入。若有多个同名设备，名称选择会明确报错，应在系统选择默认输入并清空应用设备名。保存后，ASR 与 KWS 使用同一选择。列表为空或采集失败时保留设备错误，不把角色渲染判为失败。
-2. 选择“仅识别并显示文字”，启用语音；ASR 使用 sherpa-onnx SenseVoice，CPU 1 线程。共享模型根目录应指向包内 `resources/models/`，高级模型路径可留空使用默认目录。VAD 使用包内 Silero，默认阈值 0.5、句末静音 600 ms。
+2. 选择“仅识别并显示文字”，启用语音；ASR 使用 sherpa-onnx SenseVoice，线程默认 2。勾选“启用 NPU 加速”使用包内 SenseVoice axmodel，取消勾选使用 CPU ONNX。共享模型根目录应指向包内 `resources/models/`，高级模型路径可留空使用默认目录。VAD 使用包内 Silero，默认阈值 0.5、句末静音 600 ms。
 3. 保存配置，点击“开始聆听”或角色头部。说一句简短中文，停顿后确认状态经过聆听 / 识别，识别结果区域出现文字。它是完整语句识别，不承诺实时逐字输出。
 4. 说不同句子和一段静音，检查文字是否对应本次录音、静默超时是否正常、停止按钮是否立即停止当前会话。每次会话最多处理 10 段；下一段聆听时上一段文字仍可查看。再次启动或点击头部不应显示迟到的旧轮次结果。
 5. 重启同一包，确认模式、设备名和模型配置保存；重新开始识别。再记录设备断开 / 重接、识别耗时、CPU / RSS / 温度，以及角色同时显示时的操作体验。
@@ -168,10 +192,10 @@ Audio 卡片新增语音模式与麦克风选择。先验证独立识别，无�
 需要对话时在 Audio 切换“识别、对话与朗读”：
 
 - LLM 填写板端可访问的 LM Studio 或兼容服务 URL 及真实模型 ID。若服务在 Mac 上，板端的 `127.0.0.1` 不会指向 Mac，应使用实际可达地址或用户配置的转发。外部 LLM 服务与模型由用户提供。
-- TTS 选择 sherpa-onnx ZipVoice，填写包内模型目录、用户有权使用的参考 WAV 和准确文本，先以 2 CPU 线程验收。朗读使用系统默认输出设备；先检查扬声器或耳机。参考采样率由音频文件真实读取，不通过修改标签伪装重采样。
+- TTS 选择 sherpa-onnx ZipVoice，填写包内模型目录、用户有权使用的参考 WAV 和准确文本，默认 4 线程；勾选 NPU 时使用 ZipVoice distill / Vocos axmodel，取消勾选使用 CPU ONNX。朗读使用系统默认输出设备；先检查扬声器或耳机。参考采样率由音频文件真实读取，不通过修改标签伪装重采样。
 - KWS 默认关闭。需要唤醒词时单独开启并配置中英 Zipformer 与词表；先确认头部点击 ASR 可用，再测试真实发音和误唤醒。历史 macOS 合成音频的结果不能代表板端真实关键词质量。
 
-对话沿用半双工：播放期间不采集麦克风，头部点击或停止按钮可打断。GPU / AEC 等未实现选项不开放。分别记录识别、回复、合成、首音、播放和并发负载，不把 TTS 已生成当作扬声器已播放。仅识别模式不会因未配置这些可选项而失败。
+对话沿用半双工：播放期间不采集麦克风，头部点击或停止按钮可打断。SenseVoice / ZipVoice 的 NPU 开关仅在 AX650 Linux ARM64 可用；预留 GPU / AEC 选项仍不开放。分别记录识别、回复、合成、首音、播放和并发负载，不把 TTS 已生成当作扬声器已播放。仅识别模式不会因未配置这些可选项而失败。
 
 ## 独立 CLI 诊断
 
@@ -189,4 +213,15 @@ CLI 接受 `status`、`feed [request-id]`、`play [request-id]`、`rest [request
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 待用户填写 | GL，64%，20 fps | 待测 | 待测 | 接入后测试 | 按需测试 | 待记录 | 待记录 |
 
-当前支持目标是已知 AX650N / Ubuntu 22.04 / ARM64 / XFCE X11。完整程序的 ARM64 构建与回归结果单独记录在 [开发记录](docs/26-ax650-edge.md)，与板端 UI / 录音验收分开。无 NPU 推理、原生 Wayland、他应用吸附、多屏 / 混合 DPI 或通用安装包的通过结论。后续加速需核实 SDK、模型转换、算子与量化，不能默认现有 ONNX 或图形着色器可直接交给 NPU。
+当前支持目标是已知 AX650N / Ubuntu 22.04 / ARM64 / XFCE X11。完整程序的 ARM64 构建与回归结果单独记录在 [开发记录](docs/26-ax650-edge.md)，与板端 UI / 录音验收分开。本轮已经接入 NPU 推理配置并通过编译、ABI 与纯回归检查；独立模型的另一会话结果不替代当前应用的真实麦克风、朗读与并发验收。原生 Wayland、他应用吸附、多屏 / 混合 DPI 和通用安装包仍无通过结论。
+
+
+## NPU 应用内验收补充
+
+1. 接麦克风后，先使用仅识别模式，在 SenseVoice 高级设置勾选“启用 NPU 加速”；NPU 目录留空，线程默认 2。保存并开始聆听，记录识别文字、错误和耗时。
+2. 取消 NPU，确认 CPU 路径与原自定义模型仍可用；重新勾选后应恢复 axmodel，无需手动改 CPU 路径。
+3. 对话模式中按需配置 LLM 与参考 WAV，在 ZipVoice 高级设置勾选 NPU，目录留空、线程默认 4。验证扬声器播放、中文 / 英文、短长句、停止 / 再启动及 ASR / TTS 交替。
+4. 若修改模型目录，需保持完整模型 / 前端集合。缺少 decoder part 或清单引用无效应报出配置错误；真实 SDK / NPU 初始化和模型维度错误需保留运行日志。
+5. 当前使用固定长度 SenseVoice 模型，另测超过 10 秒的发言；验证 NPU 模型分段限制、取消等待、峰值内存和软件 GL 并发体验，不要求稳定 30 fps。
+
+当前桌宠 NPU 路径的自动检查只构造配置与加载运行库，不进行推理；用户完成上述真实测试后再补入结果。

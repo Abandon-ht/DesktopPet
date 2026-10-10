@@ -36,6 +36,130 @@ fn file(path: &Path) -> Result<String> {
     Ok(path.to_str().context("模型路径不是 UTF-8")?.to_owned())
 }
 
+// Construct configs separately from native initialization so model selection can
+// be checked without accessing a microphone, NPU or desktop.
+fn sensevoice_config(settings: &VoiceSettings) -> Result<OfflineRecognizerConfig> {
+    let asr_dir = if settings.asr_npu {
+        ensure!(crate::axera_available(), "此平台不支持 AXERA NPU");
+        if settings.asr_axera_model_dir.as_os_str().is_empty() {
+            settings.model_dir.join("axera/sensevoice")
+        } else {
+            settings.asr_axera_model_dir.clone()
+        }
+    } else {
+        settings
+            .model_dir
+            .join("sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09")
+    };
+    let model = if settings.asr_npu {
+        asr_dir.join("sensevoice.axmodel")
+    } else if settings.asr_model_path.as_os_str().is_empty() {
+        asr_dir.join("model.int8.onnx")
+    } else {
+        settings.asr_model_path.clone()
+    };
+    let mut config = OfflineRecognizerConfig::default();
+    config.model_config.sense_voice.model = Some(file(&model)?);
+    config.model_config.sense_voice.language = Some("auto".into());
+    config.model_config.sense_voice.use_itn = true;
+    config.model_config.tokens = Some(file(&asr_dir.join("tokens.txt"))?);
+    config.model_config.num_threads = settings.asr_threads as i32;
+    config.model_config.provider = Some(if settings.asr_npu { "axera" } else { "cpu" }.into());
+    Ok(config)
+}
+
+fn zipvoice_config(settings: &VoiceSettings) -> Result<(OfflineTtsConfig, i32)> {
+    let zip = if settings.tts_npu {
+        ensure!(crate::axera_available(), "此平台不支持 AXERA NPU");
+        if settings.tts_axera_model_dir.as_os_str().is_empty() {
+            settings.model_dir.join("axera/zipvoice")
+        } else {
+            settings.tts_axera_model_dir.clone()
+        }
+    } else if settings.tts_model_dir.as_os_str().is_empty() {
+        settings
+            .model_dir
+            .join("sherpa-onnx-zipvoice-distill-int8-zh-en-emilia")
+    } else {
+        settings.tts_model_dir.clone()
+    };
+    let (encoder, decoder, vocoder, num_steps, guidance_scale) = if settings.tts_npu {
+        let decoder = zip.join("decoder4_split_manifest.json");
+        file(&decoder)?;
+        ensure!(
+            std::fs::metadata(&decoder)?.len() <= 1024 * 1024,
+            "ZipVoice 清单过大"
+        );
+        let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&decoder)?)
+            .context("ZipVoice decoder 清单无效")?;
+        let version = manifest["version"].as_u64();
+        ensure!(
+            matches!(version, Some(1 | 2)),
+            "ZipVoice 清单仅支持 version 1/2"
+        );
+        ensure!(
+            manifest["encoder"]["file"] == "encoder.axmodel",
+            "ZipVoice encoder 清单无效"
+        );
+        let parts = manifest["decoder_parts"]
+            .as_array()
+            .context("ZipVoice 缺少 decoder_parts")?;
+        ensure!(parts.len() == 4, "ZipVoice 需要四段 decoder axmodel");
+        for (index, part) in parts.iter().enumerate() {
+            let expected = format!("decoder_part{index}.axmodel");
+            ensure!(
+                part["file"] == expected,
+                "ZipVoice decoder 清单的分段文件名无效"
+            );
+            file(&zip.join(expected))?;
+        }
+        (
+            zip.join("encoder.axmodel"),
+            decoder,
+            zip.join("vocos_full.axmodel"),
+            if version == Some(2) { 10 } else { 4 },
+            if version == Some(2) { 1.0 } else { 3.0 },
+        )
+    } else {
+        (
+            zip.join("encoder.int8.onnx"),
+            zip.join("decoder.int8.onnx"),
+            settings.model_dir.join("vocos_24khz.onnx"),
+            4,
+            1.0,
+        )
+    };
+    let data_dir = zip.join("espeak-ng-data");
+    ensure!(
+        data_dir.is_dir(),
+        "缺少 espeak-ng-data：{}",
+        data_dir.display()
+    );
+    Ok((
+        OfflineTtsConfig {
+            model: sherpa_onnx::OfflineTtsModelConfig {
+                zipvoice: OfflineTtsZipvoiceModelConfig {
+                    tokens: Some(file(&zip.join("tokens.txt"))?),
+                    encoder: Some(file(&encoder)?),
+                    decoder: Some(file(&decoder)?),
+                    vocoder: Some(file(&vocoder)?),
+                    data_dir: Some(data_dir.to_str().context("模型路径不是 UTF-8")?.to_owned()),
+                    lexicon: Some(file(&zip.join("lexicon.txt"))?),
+                    feat_scale: 0.1,
+                    t_shift: 0.5,
+                    target_rms: 0.1,
+                    guidance_scale,
+                },
+                num_threads: settings.tts_threads as i32,
+                provider: Some(if settings.tts_npu { "axera" } else { "cpu" }.into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        num_steps,
+    ))
+}
+
 pub fn local_pipeline(settings: &VoiceSettings) -> Result<VoicePipeline> {
     local_pipeline_with_memory(settings, None)
 }
@@ -53,19 +177,7 @@ fn recognition_ports(settings: &VoiceSettings) -> Result<RecognitionPorts> {
     let vad_model = file(&vad_path)?;
     let asr: Box<dyn AsrPort> = match settings.asr_backend {
         AsrBackend::SherpaOnnx => {
-            let asr_dir = dir.join("sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09");
-            let mut config = OfflineRecognizerConfig::default();
-            let model = if settings.asr_model_path.as_os_str().is_empty() {
-                asr_dir.join("model.int8.onnx")
-            } else {
-                settings.asr_model_path.clone()
-            };
-            config.model_config.sense_voice.model = Some(file(&model)?);
-            config.model_config.sense_voice.language = Some("auto".into());
-            config.model_config.sense_voice.use_itn = true;
-            config.model_config.tokens = Some(file(&asr_dir.join("tokens.txt"))?);
-            config.model_config.num_threads = settings.asr_threads as i32;
-            config.model_config.provider = Some("cpu".into());
+            let config = sensevoice_config(settings)?;
             let recognizer = OfflineRecognizer::create(&config).context("SenseVoice 加载失败")?;
             Box::new(SenseVoice { recognizer })
         }
@@ -126,39 +238,7 @@ pub fn local_pipeline_with_memory(
         "仅转写模式应使用 local_configured_pipeline_with_memory"
     );
     let (input, asr) = recognition_ports(settings)?;
-    let dir = &settings.model_dir;
-
-    let zip = if settings.tts_model_dir.as_os_str().is_empty() {
-        dir.join("sherpa-onnx-zipvoice-distill-int8-zh-en-emilia")
-    } else {
-        settings.tts_model_dir.clone()
-    };
-    let data_dir = zip.join("espeak-ng-data");
-    ensure!(
-        data_dir.is_dir(),
-        "缺少 espeak-ng-data：{}",
-        data_dir.display()
-    );
-    let tts_config = OfflineTtsConfig {
-        model: sherpa_onnx::OfflineTtsModelConfig {
-            zipvoice: OfflineTtsZipvoiceModelConfig {
-                tokens: Some(file(&zip.join("tokens.txt"))?),
-                encoder: Some(file(&zip.join("encoder.int8.onnx"))?),
-                decoder: Some(file(&zip.join("decoder.int8.onnx"))?),
-                vocoder: Some(file(&dir.join("vocos_24khz.onnx"))?),
-                data_dir: Some(data_dir.to_str().context("模型路径不是 UTF-8")?.to_owned()),
-                lexicon: Some(file(&zip.join("lexicon.txt"))?),
-                feat_scale: 0.1,
-                t_shift: 0.5,
-                target_rms: 0.1,
-                guidance_scale: 1.0,
-            },
-            num_threads: settings.tts_threads as i32,
-            provider: Some("cpu".into()),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
+    let (tts_config, num_steps) = zipvoice_config(settings)?;
     let tts = OfflineTts::create(&tts_config).context("ZipVoice 加载失败")?;
     let reference =
         Wave::read(&file(&settings.reference_audio)?).context("参考音频读取失败，需单声道 WAV")?;
@@ -218,6 +298,7 @@ pub fn local_pipeline_with_memory(
         }),
         tts: Box::new(ZipVoice {
             tts,
+            num_steps,
             reference_audio,
             reference_sample_rate,
             reference_text: settings.reference_text.clone(),
@@ -1028,6 +1109,7 @@ fn memory_worker(path: PathBuf, config: LmStudioConfig, receiver: mpsc::Receiver
 
 struct ZipVoice {
     tts: OfflineTts,
+    num_steps: i32,
     reference_audio: Vec<f32>,
     reference_sample_rate: i32,
     reference_text: String,
@@ -1045,7 +1127,7 @@ impl TtsPort for ZipVoice {
             reference_audio: Some(self.reference_audio.clone()),
             reference_sample_rate: self.reference_sample_rate,
             reference_text: Some(self.reference_text.clone()),
-            num_steps: 4,
+            num_steps: self.num_steps,
             ..Default::default()
         };
         let active = token.clone();
@@ -1205,4 +1287,171 @@ fn output_stream(
         _ => bail!("扬声器采样格式暂不支持：{format:?}"),
     };
     Ok(stream)
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "aarch64"))]
+mod model_selection_tests {
+    use super::*;
+
+    fn models() -> (tempfile::TempDir, VoiceSettings) {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        let asr = dir.join("sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09");
+        let zip = dir.join("sherpa-onnx-zipvoice-distill-int8-zh-en-emilia");
+        for base in [
+            &asr,
+            &zip,
+            &dir.join("axera/sensevoice"),
+            &dir.join("axera/zipvoice"),
+        ] {
+            std::fs::create_dir_all(base).unwrap();
+            std::fs::write(base.join("tokens.txt"), "fixture").unwrap();
+        }
+        let npu = dir.join("axera/zipvoice");
+        for base in [&zip, &npu] {
+            std::fs::create_dir_all(base.join("espeak-ng-data")).unwrap();
+            std::fs::write(base.join("lexicon.txt"), "fixture").unwrap();
+        }
+        for path in [
+            asr.join("custom.onnx"),
+            zip.join("encoder.int8.onnx"),
+            zip.join("decoder.int8.onnx"),
+            dir.join("vocos_24khz.onnx"),
+            dir.join("axera/sensevoice/sensevoice.axmodel"),
+            npu.join("encoder.axmodel"),
+            npu.join("vocos_full.axmodel"),
+        ] {
+            std::fs::write(path, "fixture").unwrap();
+        }
+        for index in 0..4 {
+            std::fs::write(npu.join(format!("decoder_part{index}.axmodel")), "fixture").unwrap();
+        }
+        let manifest = serde_json::json!({"version":1,"encoder":{"file":"encoder.axmodel"},
+            "decoder_parts":(0..4).map(|i| serde_json::json!({"file":format!("decoder_part{i}.axmodel")})).collect::<Vec<_>>()});
+        std::fs::write(
+            npu.join("decoder4_split_manifest.json"),
+            manifest.to_string(),
+        )
+        .unwrap();
+        let settings = VoiceSettings {
+            model_dir: dir.into(),
+            asr_model_path: asr.join("custom.onnx"),
+            tts_model_dir: zip,
+            ..VoiceSettings::ax650_defaults()
+        };
+        (root, settings)
+    }
+
+    #[test]
+    fn acceleration_selects_matching_models_and_restores_cpu_overrides() {
+        let (_root, mut settings) = models();
+        settings.asr_npu = true;
+        settings.tts_npu = true;
+        let asr = sensevoice_config(&settings).unwrap();
+        let (tts, steps) = zipvoice_config(&settings).unwrap();
+        assert_eq!(asr.model_config.provider.as_deref(), Some("axera"));
+        assert_eq!(asr.model_config.num_threads, 2);
+        assert!(
+            asr.model_config
+                .sense_voice
+                .model
+                .unwrap()
+                .ends_with("axera/sensevoice/sensevoice.axmodel")
+        );
+        assert_eq!(tts.model.provider.as_deref(), Some("axera"));
+        assert_eq!(tts.model.num_threads, 4);
+        assert!(
+            tts.model
+                .zipvoice
+                .decoder
+                .unwrap()
+                .ends_with("decoder4_split_manifest.json")
+        );
+        assert!(
+            tts.model
+                .zipvoice
+                .vocoder
+                .unwrap()
+                .ends_with("vocos_full.axmodel")
+        );
+        assert_eq!((steps, tts.model.zipvoice.guidance_scale), (4, 3.0));
+        settings.asr_npu = false;
+        settings.tts_npu = false;
+        let asr = sensevoice_config(&settings).unwrap();
+        let (tts, steps) = zipvoice_config(&settings).unwrap();
+        assert_eq!(asr.model_config.provider.as_deref(), Some("cpu"));
+        assert!(
+            asr.model_config
+                .sense_voice
+                .model
+                .unwrap()
+                .ends_with("custom.onnx")
+        );
+        assert_eq!(tts.model.provider.as_deref(), Some("cpu"));
+        assert!(
+            tts.model
+                .zipvoice
+                .encoder
+                .unwrap()
+                .ends_with("encoder.int8.onnx")
+        );
+        assert_eq!((steps, tts.model.zipvoice.guidance_scale), (4, 1.0));
+    }
+
+    #[test]
+    fn missing_or_escaping_decoder_is_rejected_before_native_initialization() {
+        let (_root, mut settings) = models();
+        settings.tts_npu = true;
+        let zip = settings.model_dir.join("axera/zipvoice");
+        std::fs::remove_file(zip.join("decoder_part2.axmodel")).unwrap();
+        assert!(
+            zipvoice_config(&settings)
+                .unwrap_err()
+                .to_string()
+                .contains("decoder_part2")
+        );
+        let path = zip.join("decoder4_split_manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        manifest["decoder_parts"][0]["file"] = "../outside.axmodel".into();
+        std::fs::write(path, manifest.to_string()).unwrap();
+        assert!(
+            zipvoice_config(&settings)
+                .unwrap_err()
+                .to_string()
+                .contains("分段文件名")
+        );
+    }
+
+    #[test]
+    fn custom_npu_directory_and_standard_manifest_choose_correct_generation() {
+        let (root, mut settings) = models();
+        settings.tts_npu = true;
+        let custom = root.path().join("custom-zipvoice");
+        std::fs::rename(settings.model_dir.join("axera/zipvoice"), &custom).unwrap();
+        settings.tts_axera_model_dir = custom.clone();
+        let path = custom.join("decoder4_split_manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        manifest["version"] = 2.into();
+        std::fs::write(path, manifest.to_string()).unwrap();
+        let (config, steps) = zipvoice_config(&settings).unwrap();
+        assert_eq!((steps, config.model.zipvoice.guidance_scale), (10, 1.0));
+        assert!(
+            config
+                .model
+                .zipvoice
+                .encoder
+                .unwrap()
+                .contains("custom-zipvoice")
+        );
+        settings.asr_npu = true;
+        settings.asr_axera_model_dir = root.path().join("missing-asr");
+        assert!(
+            sensevoice_config(&settings)
+                .unwrap_err()
+                .to_string()
+                .contains("sensevoice.axmodel")
+        );
+    }
 }

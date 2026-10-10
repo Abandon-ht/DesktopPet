@@ -302,6 +302,58 @@ def model_files(directory, full_voice_models=False):
     return files
 
 
+def axera_model_files(directory):
+    if directory is None:
+        return []
+    names = ["sensevoice/sensevoice.axmodel", "sensevoice/tokens.txt",
+             "zipvoice/encoder.axmodel", "zipvoice/decoder4_split_manifest.json",
+             *(f"zipvoice/decoder_part{index}.axmodel" for index in range(4)),
+             "zipvoice/vocos_full.axmodel", "zipvoice/tokens.txt", "zipvoice/lexicon.txt"]
+    manifest = read_json(private_resource_file(directory, Path(names[3]), MAX_JSON))
+    require(manifest.get("version") in (1, 2) and manifest.get("encoder", {}).get("file") == "encoder.axmodel",
+            "unsupported ZipVoice encoder/manifest version")
+    parts = manifest.get("decoder_parts")
+    require(isinstance(parts, list) and len(parts) == 4
+            and all(isinstance(part, dict) and part.get("file") == f"decoder_part{index}.axmodel"
+                    for index, part in enumerate(parts)), "expected four ordered ZipVoice decoder files")
+    files = [(private_resource_file(directory, Path(name)), Path("resources/models/axera") / name) for name in names]
+    espeak = directory / "zipvoice/espeak-ng-data"
+    require(espeak.is_dir() and not espeak.is_symlink(), "AXERA TTS requires espeak-ng-data")
+    data = sorted(espeak.rglob("*"))
+    require(data and not any(path.is_symlink() for path in data), "empty or symlink espeak data")
+    for path in data:
+        if path.is_file():
+            relative = path.relative_to(directory)
+            files.append((private_resource_file(directory, relative, MAX_FILE), Path("resources/models/axera") / relative))
+    for subdir in ("sensevoice", "zipvoice"):
+        for name in ("README.md", "LICENSE", "NOTICE.md", "provenance.json"):
+            relative = Path(subdir) / name
+            if (directory / relative).exists():
+                files.append((private_resource_file(directory, relative, MAX_JSON), Path("resources/models/axera") / relative))
+    require(len(files) <= 2048 and sum(source.stat().st_size for source, _ in files) <= 1024 * 1024 * 1024,
+            "AXERA model budget exceeded")
+    return files
+
+
+def sherpa_files(directory):
+    if directory is None:
+        return []
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("axera_native_runtime", TOOLS / "native-runtime.py")
+    runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime)
+    runtime.validate(directory)
+    files = []
+    for name in ("libsherpa-onnx-c-api.so", "libonnxruntime.so"):
+        source = directory / "lib" / name
+        verify_elf(source)
+        files.append((source, Path("lib") / name))
+    for name in runtime.LICENSES:
+        files.append((directory / "licenses" / name, Path("lib/licenses") / name))
+    files.append((directory / "runtime.json", Path("lib/sherpa-runtime.json")))
+    return files
+
+
 def voice_files(directory):
     if directory is None:
         return []
@@ -362,14 +414,17 @@ README = """DesktopPet AX650 私有完整桌宠开发包
 可选 --cli 启动文字诊断程序；--seconds 仅在 --cli 模式可用。
 
 语音、KWS、问候与联网默认关闭。麦克风接入后在设置中启用并测试。
-ASR/VAD/TTS/KWS 使用 CPU，外部 LLM 服务由用户配置；NPU 尚未接入。
+SenseVoice / ZipVoice 默认 2 / 4 线程；在各自高级设置勾选“启用 NPU 加速”
+自动选择 resources/models/axera 下的 axmodel。取消勾选恢复 CPU ONNX 模型。
+VAD / KWS 使用 CPU，外部 LLM 服务由用户配置。
 软件 WebKit 设置关闭加速合成，保留 WebKit sandbox。
 data/ 与 logs/ 保留本包的独立存档和运行记录，移动包时可一并保留。
 日志和 CPU 提交/present 统计不能替代用户目视的角色/透明/交互验收。
 稳定 30 fps 不作为验收门槛。
 
 角色资源仅供用户私有验证，版权和再分发权利未核实，不得公开上传。
-可选 lib/ 只含 Ubuntu XKB / xdo 运行库及其许可证；GL/EGL/Mesa 驱动由板上提供。
+lib/ 携带 XKB / xdo、锁定版本的 sherpa-onnx AXERA shared / ONNX Runtime 及许可证。
+AXERA SDK 使用板上 /soc/lib，GL/EGL/Mesa 驱动由板上提供。
 普通启动也会先做动态加载预检，结果保存在 runtime-deps.json。
 检查通过仅代表运行库可加载，不能证明桌面授权、合成器或渲染成功。
 本包不安装软件、不改桌面服务，也不包含 VNC/Remote Desktop 测试工具。
@@ -377,13 +432,13 @@ data/ 与 logs/ 保留本包的独立存档和运行记录，移动包时可一�
 
 
 def package(binaries, avatar, runtime_libs, output, models=None, voice=None, notices=None, include_cli=False,
-            full_voice_models=False):
+            full_voice_models=False, axera_models=None, sherpa_native=None):
     output, archive, archive_checksum = output_paths(output)
     names = BINARIES + ((CLI_BINARY,) if include_cli else ())
     binary_info = {name: verify_elf(binaries / name) for name in names}
     avatar_root, assets, manifest = avatar_files(avatar)
-    libraries = runtime_files(runtime_libs)
-    extra_resources = model_files(models, full_voice_models) + voice_files(voice) + notice_files(notices)
+    libraries = runtime_files(runtime_libs) + sherpa_files(sherpa_native)
+    extra_resources = model_files(models, full_voice_models) + axera_model_files(axera_models) + voice_files(voice) + notice_files(notices)
     try:
         output.mkdir(parents=True)
         for name in names:
@@ -402,8 +457,8 @@ def package(binaries, avatar, runtime_libs, output, models=None, voice=None, not
             enabled=False, kws_enabled=False, wake_greeting_enabled=False, timed_greetings_enabled=False,
             first_greeting_enabled=False, web_enabled=False, asr_backend="sherpa_onnx",
             model_dir="@desktop-pet-resources/models", mode="transcription", input_device_name="",
-            asr_threads=1, asr_gpu=False,
-            tts_threads=2, tts_gpu=False, kws_threads=1, output_volume_percent=100,
+            asr_threads=2, asr_npu=False,
+            tts_threads=4, tts_npu=False, kws_threads=1, output_volume_percent=100,
         )
         if voice is not None:
             settings.update(
@@ -418,12 +473,14 @@ def package(binaries, avatar, runtime_libs, output, models=None, voice=None, not
         (output / "README.txt").write_text(README, encoding="utf-8")
         info = {
             "schema_version": 1,
-            "scope": "Private Ubuntu 22.04 AArch64 AX650 complete Tauri desktop pet with CPU voice resources",
+            "scope": "Private Ubuntu 22.04 AArch64 AX650 complete Tauri desktop pet with CPU / optional AXERA voice resources",
             **source_metadata(),
             "binaries": binary_info, "default_backend": "gl",
             "entrypoint": "desktop-pet", "diagnostic_cli": include_cli,
             "voice_models": ["vad", "asr", "tts", "kws"] if full_voice_models else ["vad", "asr"],
             "localized_voice": voice is not None,
+            "axera_models": axera_models is not None,
+            "sherpa_native": read_json(sherpa_native / "runtime.json") if sherpa_native else None,
             "avatar_license": {key: manifest["license"].get(key) for key in ("status", "redistributable")},
             "runtime_libraries": [target.name for _, target in libraries if target.parent == Path("lib")],
             "files": {path.relative_to(output).as_posix(): digest(path)
@@ -452,6 +509,8 @@ def main():
                         help="directory with the two whitelisted regular XKB .so files and licenses/")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--models", type=Path, help="explicit CPU VAD/ASR/TTS/KWS model root")
+    parser.add_argument("--axera-models", type=Path, help="optional staged sensevoice/ and zipvoice/ AXERA model root")
+    parser.add_argument("--sherpa-native", type=Path, help="verified AXERA shared native cache (SDK excluded from package)")
     parser.add_argument("--voice", type=Path, help="optional localized WAV/TXT root with Chinese noon reference")
     parser.add_argument("--notices", type=Path, help="optional original resource provenance notices")
     parser.add_argument("--include-cli", action="store_true", help="also include the renderer diagnostic CLI")
@@ -460,16 +519,18 @@ def main():
     args = parser.parse_args()
     try:
         if args.verify_binaries:
-            require(not any((args.binaries, args.avatar, args.runtime_libs, args.output, args.models, args.voice, args.notices)),
+            require(not any((args.binaries, args.avatar, args.runtime_libs, args.output, args.models, args.voice, args.notices, args.axera_models, args.sherpa_native)),
                     "verification mode cannot create a package")
             names = BINARIES + ((CLI_BINARY,) if args.include_cli else ())
             print(json.dumps({name: verify_elf(args.verify_binaries / name) for name in names}, indent=2))
         else:
             require(all((args.binaries, args.avatar, args.output)), "--binaries, --avatar and --output are required")
+            require(args.sherpa_native is not None, "AX650 shared build requires --sherpa-native")
             for path in package(args.binaries, args.avatar, args.runtime_libs, args.output,
-                                args.models, args.voice, args.notices, args.include_cli, args.full_voice_models):
+                                args.models, args.voice, args.notices, args.include_cli, args.full_voice_models,
+                                args.axera_models, args.sherpa_native):
                 print(path)
-    except (PackageError, OSError, UnicodeError, json.JSONDecodeError, struct.error, TypeError,
+    except (ValueError, OSError, UnicodeError, json.JSONDecodeError, struct.error, TypeError,
             subprocess.CalledProcessError) as error:
         parser.exit(1, f"AX650 packaging failed: {error}\n")
 

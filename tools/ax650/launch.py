@@ -69,7 +69,7 @@ def desktop_environment(display, proc=Path("/proc"), uid=None):
 
 def environment(root, backend, inherited, full_app=True):
     env = inherited.copy()
-    env["LD_LIBRARY_PATH"] = str(root / "lib") + (
+    env["LD_LIBRARY_PATH"] = str(root / "lib") + ":/soc/lib" + (
         ":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
     env.setdefault("DISPLAY", ":0")
     if full_app and not env.get("DBUS_SESSION_BUS_ADDRESS"):

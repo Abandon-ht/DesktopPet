@@ -15,9 +15,15 @@ pet-web-retrieval = { path = "../web-retrieval" }
 pet-persistence = { path = "../persistence" }
 serde.workspace = true
 serde_json.workspace = true
-sherpa-onnx = { version = "=1.13.8", default-features = false, features = ["static"] }
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "time"] }
 
 [dev-dependencies]
 serde_json.workspace = true
+
+# AX650 uses the tested ZipVoice AXERA fork and matching shared C API.
+[target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
+sherpa-onnx = { git = "https://github.com/Abandon-ht/sherpa-onnx", rev = "5473e19db9c08e63aa41e4c273d9b3f743f1cd25", default-features = false, features = ["shared"] }
+
+[target.'cfg(not(all(target_os = "linux", target_arch = "aarch64")))'.dependencies]
+sherpa-onnx = { git = "https://github.com/Abandon-ht/sherpa-onnx", rev = "5473e19db9c08e63aa41e4c273d9b3f743f1cd25", default-features = false, features = ["static"] }

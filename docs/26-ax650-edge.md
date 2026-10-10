@@ -34,12 +34,12 @@ DRM card 和 framebuffer 的存在说明显示输出，不足以说明可执行 
 | --- | --- |
 | `desktop-pet` | XFCE 托盘、角色与设置窗口、导入与切换、显示 / 隐藏、养成、存档、主程序与宿主生命周期 |
 | `avatar-host-2d` | Mocari 模型与表情、软件 GL、透明置顶窗口、X11 点击穿透与拖拽、屏幕位置、渲染统计 |
-| `pet-voice-session` / CPAL / sherpa-onnx | 输入设备选择、麦克风采集、Silero VAD、CPU SenseVoice、识别结果显示，以及可选会话与朗读 |
+| `pet-voice-session` / CPAL / sherpa-onnx | 输入设备选择、麦克风采集、Silero VAD、SenseVoice CPU / NPU、识别结果显示，以及可选会话与朗读 |
 | `PetCore` / `CareStore` | 原有养成与细分点击规则、行为仲裁、SQLite 事务和请求去重 |
 | `desktop-pet-ax650` | 独立诊断；定位渲染、养成 IPC 和异常清理问题，不提供托盘或麦克风识别 |
 | `tools/ax650` | Ubuntu 22.04 原生 ARM64 构建、完整私有包、运行依赖预检、独立数据与日志 |
 
-AX650 设备配置通过 `DESKTOPPET_DEVICE_PROFILE=ax650` 选择。新存档初始使用较小角色、20 fps 调度预算、软件 GL；语音初始关闭，模式为“仅识别并显示文字”，ASR / KWS 1 线程、TTS 2 线程，GPU、AEC 和 KWS 关闭。已保存的用户语音设置优先，不反复覆盖用户配置。
+AX650 设备配置通过 `DESKTOPPET_DEVICE_PROFILE=ax650` 选择。新存档初始使用较小角色、20 fps 调度预算、软件 GL；语音初始关闭，模式为“仅识别并显示文字”，ASR 2 / KWS 1 线程、TTS 4 线程，NPU、预留 GPU、AEC 和 KWS 关闭。已保存的用户语音设置优先，不反复覆盖用户配置。
 
 GL 透明兼容只在显式开启 `DESKTOPPET_X11_GL_ALPHA=1`、实际 GL 后端、surface 支持 `Opaque`、窗口深度为 32、XRender alpha 通道有效且合成器 selection 有 owner 时成立。普通 PreMultiplied / PostMultiplied 路径仍优先，NVIDIA Vulkan 例外独立保留。日志记录 surface 和原生透明证据。Vulkan 是显式诊断入口，历史空白尚未定位。
 
@@ -54,14 +54,14 @@ GL 透明兼容只在显式开启 `DESKTOPPET_X11_GL_ALPHA=1`、实际 GL 后端
 | 资源 | 默认 CPU 路径 |
 | --- | --- |
 | VAD | `resources/models/silero_vad.onnx`，16 kHz、1 线程 |
-| ASR | `resources/models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/` 中的 `model.int8.onnx` 与 `tokens.txt`，1 线程 |
+| ASR | `resources/models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/` 中的 `model.int8.onnx` 与 `tokens.txt`，2 线程 |
 | KWS，可选 | 中英 Zipformer 模型与词表；关闭时不要求这些文件，不作为 ASR 首次验收前提 |
 | LLM，可选 | 用户配置的可达 LM Studio 或兼容 Chat Completions 服务及真实模型 ID；板端的 `127.0.0.1` 指板卡自身 |
-| TTS，可选 | ZipVoice int8、Vocos、参考 WAV 与准确文本；AX650 初始线程预算为 2，实际速度与音质待测 |
+| TTS，可选 | ZipVoice int8、Vocos、参考 WAV 与准确文本；AX650 初始线程预算为 4，实际速度与音质待测 |
 
 “识别、对话与朗读”模式沿用现有半双工管线：VAD → SenseVoice → LLM → ZipVoice → CPAL 输出。输出使用系统默认音频设备；播放时停止采集，头部点击或停止按钮可打断。LM Studio 等外部服务由用户提供，不随桌宠启动或关闭。模型、服务和真实音频设备分别报告状态，缺少可选资源不阻塞仅识别模式。
 
-当前不开放未实现的 GPU / AEC 组合；ASR 模型在 CPU 上执行，NPU 转换属于后续适配。KWS、麦克风拔插恢复、识别准确率、TTS 延迟以及渲染和推理并发时的 CPU / 温度需实际测量。语音整体设计见 [流水线](19-p3-voice-pipeline.md) 与 [设置说明](20-p3-voice-settings-and-greetings.md)。
+当前不开放未实现的 GPU / AEC 组合；SenseVoice / ZipVoice 已接入可选 AXERA NPU。勾选“启用 NPU 加速”自动选择包内匹配 axmodel；VAD / KWS 保留 CPU。模型来自另一会话已经转换并测试的集合。KWS、麦克风拔插恢复、识别准确率、TTS 延迟以及渲染和推理并发时的 CPU / 温度需实际测量。语音整体设计见 [流水线](19-p3-voice-pipeline.md) 与 [设置说明](20-p3-voice-settings-and-greetings.md)。
 
 ## 运行、数据与验收边界
 
@@ -85,7 +85,8 @@ GL 透明兼容只在显式开启 `DESKTOPPET_X11_GL_ALPHA=1`、实际 GL 后端
 | 真实托盘、设置、透明、点击、拖拽、养成与重启 | 由用户在板端 HDMI / XFCE 桌面测试 |
 | 麦克风选择、VAD、ASR 文字与停止 | 用户接入麦克风后测试；当前没有录音或准确率结论 |
 | LLM / TTS / KWS、长期运行 CPU / RSS / 温度 | 可选功能分别验收；不要求稳定 30 fps |
-| Vulkan、NPU、原生 Wayland | 无当前可用性结论 |
+| Vulkan、原生 Wayland | 无当前可用性结论 |
+| NPU 应用接入 | 配置、ABI、编译与纯回归通过；真实麦克风 / 应用内朗读待用户测试 |
 
 不安装 VNC，不使用 Remote Desktop 验证。编译和不启动窗口的检查完成后，交付完整包、摘要和手动步骤；真实 UI / 麦克风测试由用户进行，不因为麦克风尚未接入而把 ASR 实现延期。
 
@@ -96,7 +97,18 @@ GL 透明兼容只在显式开启 `DESKTOPPET_X11_GL_ALPHA=1`、实际 GL 后端
 | 完整 AX650 开发包，本轮 | 复用 Tauri 托盘 / 设置 / 养成，接入 AX650 软件 GL 配置和独立 ASR 模式，完成 ARM64 构建与私有资源打包 |
 | 用户板端验收 | 托盘、设置、透明、输入、存档；麦克风接入后验证设备选择、VAD、ASR 文字、停止与重试 |
 | 运行质量与可选语音 | 按实测调整帧调度和线程预算，验证 KWS / LLM / TTS、持续运行与音频设备变化；不以 30 fps 为门槛 |
-| AXERA 加速适配 | 核实 SDK / NPU 运行时、转换工具、算子与量化要求；先转换一个候选模型验证质量和资源，再决定集成 |
+| AXERA 加速适配，本轮已实现 | 复用已测试的 SenseVoice / ZipVoice / Vocos axmodel 与 zipvoice-axera 分支；独立保存 CPU / NPU 目录，编译和配置回归通过；当前应用真实音频与并发由用户测试 |
 | 后续交付 | 根据实际需求实现配置远程控制、通用安装包、多屏 / 混合 DPI 与平台扩展；分别验收 |
 
 NPU 不会默认直接执行现有 ONNX，也不是通用图形 GPU。若采用 IVPS / VO 或序列帧优化，需要另测格式、同步、透明与 XFCE 共存，不影响本轮完整桌宠与 CPU ASR 的实现范围。
+
+
+## SenseVoice / ZipVoice NPU 接入（2026-10-10）
+
+- sherpa-onnx 固定 `codex/zipvoice-axera` revision `5473e19db9c08e63aa41e4c273d9b3f743f1cd25`。Linux ARM64 使用 AXERA-enabled shared C API 与 ONNX Runtime；其余目标保留 static。版本字符串仍为 1.13.8，原生 artifact 由 SHA-256 固定。Rust overlay 仅补齐该分支 C API 已追加的 offline CTC 字段；12 个 C / Rust 配置结构的大小、对齐、每个字段偏移一致。
+- SenseVoice 默认采用已独立测试的 AX650 10 秒模型及对应 tokens，来源 revision `7cf51476f6236f5dd81f08d9df533483e6845c2f`；ZipVoice 默认采用 distill encoder、四段 decoder 和 version 1 JSON 清单，以及 Vocos axmodel，来源 revision `aa48d14426f528a63ccb0720edb79651597e5316`。保留 HF 来源、前端和许可证；来源账号不是模型名称。
+- 两个高级设置里的 GPU 预留项改为“启用 NPU 加速”。勾选后 provider 为 `axera`，默认解析 `models/axera/sensevoice` / `models/axera/zipvoice`；不勾选时沿用原 CPU ONNX 路径。可分别设置 NPU 模型目录，CPU 自定义路径不被覆盖，资源路径可随包移动。默认 ASR 2、TTS 4 线程，旧存档保留用户已保存的值，VAD / KWS 仍为 CPU。
+- NPU ZipVoice distill 使用 4 steps / guidance 3.0；自定义 standard version 2 清单使用 10 steps / guidance 1.0。加载前验证 decoder 清单和四段文件；语音取消沿用已有 generation 与回调检查。
+- 本轮 Ubuntu 22.04 ARM64 release 编译通过；主程序最高 GLIBC 2.34，宿主 2.35，直接依赖解析通过。14 项桌面、15 项语音纯回归与 all-targets 严格 Clippy 通过；3 项既有设备 / 网络测试仍忽略。26 项工具回归通过 Ubuntu Python 3.10。测试覆盖模型切换、CPU 路径恢复、完整清单、缺失 / 越界分段、旧配置迁移和包移动，不打开真实麦克风或 NPU 推理模型。
+
+另一会话的独立 C++ / C API 模型测试只是当前模型选择依据。本轮桌宠的真实 NPU 识别、克隆朗读、取消延迟、长发言及渲染并发仍由用户在 HDMI / XFCE 与接入的麦克风验收。当前实现不增加 VNC / Remote Desktop，不要求稳定 30 fps。来源、原生 artifact、ABI 和用户步骤见 [构建文档](../BUILDING.ax650.zh-CN.md)。

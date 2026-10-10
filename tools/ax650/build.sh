@@ -26,6 +26,15 @@ export CARGO_TARGET_DIR="${1:-${CARGO_TARGET_DIR:-$source_root/target}}"
 mkdir -p "$CARGO_TARGET_DIR"
 export CARGO_TARGET_DIR=$(realpath "$CARGO_TARGET_DIR")
 pkg-config --exists gtk+-3.0 webkit2gtk-4.1 alsa ayatana-appindicator3-0.1
+if [ -z "${SHERPA_ONNX_LIB_DIR:-}" ] || [ "$(basename "$SHERPA_ONNX_LIB_DIR")" != lib ]; then
+    echo 'Set SHERPA_ONNX_LIB_DIR to the verified AXERA native cache lib/ directory' >&2
+    exit 1
+fi
+native_root=$(dirname "$SHERPA_ONNX_LIB_DIR")
+python3 tools/ax650/native-runtime.py "$native_root" --verify
+python3 tools/ax650/check-sherpa-abi.py "$native_root/include/c-api.h"
+export LD_LIBRARY_PATH="$SHERPA_ONNX_LIB_DIR:$native_root/sdk${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LIBRARY_PATH="$SHERPA_ONNX_LIB_DIR:$native_root/sdk${LIBRARY_PATH:+:$LIBRARY_PATH}"
 build_packages=(-p desktop-pet -p avatar-host-2d)
 verify_options=()
 binaries=(desktop-pet avatar-host-2d)

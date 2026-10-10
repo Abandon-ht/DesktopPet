@@ -399,6 +399,10 @@ fn status(state: tauri::State<'_, Arc<Shared>>) -> Status {
     status
 }
 #[tauri::command]
+fn voice_npu_available() -> bool {
+    pet_voice_session::axera_available()
+}
+#[tauri::command]
 fn voice_input_devices() -> Result<Vec<String>, String> {
     pet_voice_session::input_devices().map_err(|error| format!("{error:#}"))
 }
@@ -1513,6 +1517,7 @@ fn run() -> Result<()> {
             companion_activity,
             voice_input_devices,
             voice_settings,
+            voice_npu_available,
             set_voice_settings,
             set_web_settings,
             voice_status,

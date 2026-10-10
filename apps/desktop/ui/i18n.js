@@ -1,6 +1,12 @@
 // UI copy is keyed by its original Chinese text. Record each source text node
 // once so switching languages never translates an already translated string.
 const translations = {
+  '启用 NPU 加速':['Enable NPU acceleration','NPU 高速化を有効にする','NPU 가속 사용'],
+  '线程数':['Threads','スレッド数','스레드 수'],
+  'SenseVoice axmodel 目录':['SenseVoice axmodel directory','SenseVoice axmodel フォルダー','SenseVoice axmodel 디렉터리'],
+  'ZipVoice axmodel 目录':['ZipVoice axmodel directory','ZipVoice axmodel フォルダー','ZipVoice axmodel 디렉터리'],
+  '留空使用 axera/sensevoice（axmodel 和词表）':['Blank: axera/sensevoice (axmodel and tokens)','空欄：axera/sensevoice（axmodel と語彙）','비워 두면 axera/sensevoice(axmodel 및 어휘)'],
+  '留空使用 axera/zipvoice（encoder、四段 decoder、Vocos）':['Blank: axera/zipvoice (encoder, four decoder parts, Vocos)','空欄：axera/zipvoice（encoder・decoder 4 分割・Vocos）','비워 두면 axera/zipvoice(encoder, decoder 4개, Vocos)'],
   '界面语言':['Interface language','表示言語','화면 언어'],
   'DESKTOPPET · 本地预览':['DESKTOPPET · Local preview','DESKTOPPET · ローカルプレビュー','DESKTOPPET · 로컬 미리보기'],
   '你的桌面伙伴':['Your desktop companion','デスクトップの相棒','나의 데스크톱 친구'],

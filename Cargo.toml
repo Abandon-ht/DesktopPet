@@ -16,6 +16,7 @@ members = [
     "tools/p0-ipc-probe",
     "tools/p0-tauri-probe",
 ]
+exclude = ["vendor/zipvoice-axera/sherpa-onnx", "vendor/zipvoice-axera/sherpa-onnx-sys"]
 resolver = "3"
 
 [workspace.package]
@@ -30,3 +31,8 @@ anyhow = "1"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 pollster = "0.4"
+
+# Rust bindings from this revision, with its appended offline CTC field fixed.
+[patch."https://github.com/Abandon-ht/sherpa-onnx"]
+sherpa-onnx = { path = "vendor/zipvoice-axera/sherpa-onnx" }
+sherpa-onnx-sys = { path = "vendor/zipvoice-axera/sherpa-onnx-sys" }

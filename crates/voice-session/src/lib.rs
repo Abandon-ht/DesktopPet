@@ -71,7 +71,9 @@ pub struct VoiceSettings {
     pub model_dir: PathBuf,
     pub asr_model_path: PathBuf,
     pub asr_threads: u8,
-    pub asr_gpu: bool,
+    #[serde(alias = "asr_gpu")]
+    pub asr_npu: bool,
+    pub asr_axera_model_dir: PathBuf,
     pub asr_ncnn_model_dir: PathBuf,
     pub asr_ncnn_executable: PathBuf,
     pub asr_ncnn_threads: u8,
@@ -79,7 +81,9 @@ pub struct VoiceSettings {
     pub asr_mlx_model_dir: PathBuf,
     pub asr_mlx_device: String,
     pub tts_model_dir: PathBuf,
-    pub tts_gpu: bool,
+    #[serde(alias = "tts_gpu")]
+    pub tts_npu: bool,
+    pub tts_axera_model_dir: PathBuf,
     pub tts_speaker: String,
     pub tts_service_url: String,
     pub kokoro_model_dir: PathBuf,
@@ -129,8 +133,9 @@ impl Default for VoiceSettings {
             tts_backend: TtsBackend::default(),
             model_dir: PathBuf::new(),
             asr_model_path: PathBuf::new(),
-            asr_threads: 1,
-            asr_gpu: false,
+            asr_threads: 2,
+            asr_npu: false,
+            asr_axera_model_dir: PathBuf::new(),
             asr_ncnn_model_dir: PathBuf::new(),
             asr_ncnn_executable: PathBuf::from("sherpa-ncnn-offline"),
             asr_ncnn_threads: 1,
@@ -138,7 +143,8 @@ impl Default for VoiceSettings {
             asr_mlx_model_dir: PathBuf::new(),
             asr_mlx_device: "auto".into(),
             tts_model_dir: PathBuf::new(),
-            tts_gpu: false,
+            tts_npu: false,
+            tts_axera_model_dir: PathBuf::new(),
             tts_speaker: String::new(),
             tts_service_url: "http://127.0.0.1:8080".into(),
             kokoro_model_dir: PathBuf::new(),
@@ -168,7 +174,7 @@ impl Default for VoiceSettings {
             lm_studio_model: "qwen/qwen3.6-35b-a3b".into(),
             llm_api_key: String::new(),
             system_prompt: "你是桌面宠物。请用自然、简短的中文回答，只输出适合朗读的正文。".into(),
-            tts_threads: 8,
+            tts_threads: 4,
             remember_context: true,
             output_volume_percent: 100,
             web_enabled: false,
@@ -178,12 +184,16 @@ impl Default for VoiceSettings {
     }
 }
 
+/// This target is linked to the pinned AXERA-enabled shared runtime.
+pub const fn axera_available() -> bool {
+    cfg!(all(target_os = "linux", target_arch = "aarch64"))
+}
+
 impl VoiceSettings {
     /// Initial AX650 settings only; saved user choices still take precedence.
     pub fn ax650_defaults() -> Self {
         Self {
             mode: VoiceMode::Transcription,
-            tts_threads: 2,
             kokoro_threads: 1,
             wake_greeting_enabled: false,
             timed_greetings_enabled: false,
@@ -241,13 +251,16 @@ impl VoiceSettings {
         if self.enabled && conversation && self.tts_backend != TtsBackend::SherpaOnnx {
             bail!("所选 TTS 后端尚未接入，请选择 sherpa-onnx");
         }
-        if self.enabled
-            && (self.asr_gpu
-                || self.asr_ncnn_gpu
-                || (conversation && self.tts_gpu)
-                || self.aec_enabled)
-        {
+        if self.enabled && (self.asr_ncnn_gpu || self.aec_enabled) {
             bail!("当前构建尚未接入 GPU 或 AEC；请关闭相应开关");
+        }
+        if self.enabled && (self.asr_npu || (conversation && self.tts_npu)) {
+            if !axera_available() {
+                bail!("NPU 加速需要 AX650 Linux ARM64 构建与 AXERA 运行库");
+            }
+            if self.asr_npu && self.asr_backend != AsrBackend::SherpaOnnx {
+                bail!("SenseVoice NPU 加速仅支持 sherpa-onnx");
+            }
         }
         if self.enabled
             && self.asr_backend == AsrBackend::SherpaNcnn
@@ -596,6 +609,26 @@ fn spoken_segments(text: &str, limit: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_acceleration_keys_migrate_without_losing_thread_choices() {
+        let settings: VoiceSettings = serde_json::from_str(
+            r#"{"asr_gpu":false,"tts_gpu":true,"asr_threads":3,"tts_threads":6}"#,
+        )
+        .unwrap();
+        assert!(!settings.asr_npu && settings.tts_npu);
+        assert_eq!((settings.asr_threads, settings.tts_threads), (3, 6));
+        let saved = serde_json::to_value(settings).unwrap();
+        assert!(saved.get("asr_gpu").is_none() && saved.get("tts_gpu").is_none());
+        assert_eq!(saved["tts_npu"], true);
+        assert_eq!(
+            (
+                VoiceSettings::default().asr_threads,
+                VoiceSettings::default().tts_threads
+            ),
+            (2, 4)
+        );
+    }
     use std::sync::atomic::AtomicUsize;
     #[test]
     fn older_voice_settings_gain_safe_provider_defaults() {
@@ -649,20 +682,21 @@ mod tests {
             .validate()
             .is_err()
         );
-        assert!(
+        assert_eq!(
             VoiceSettings {
-                asr_gpu: true,
+                asr_npu: true,
                 ..settings
             }
             .validate()
-            .is_err()
+            .is_ok(),
+            axera_available()
         );
         let ax650 = VoiceSettings::ax650_defaults();
-        assert!(!ax650.enabled && !ax650.kws_enabled && !ax650.asr_gpu && !ax650.tts_gpu);
+        assert!(!ax650.enabled && !ax650.kws_enabled && !ax650.asr_npu && !ax650.tts_npu);
         assert_eq!(ax650.mode, VoiceMode::Transcription);
         assert_eq!(
             (ax650.asr_threads, ax650.kws_threads, ax650.tts_threads),
-            (1, 1, 2)
+            (2, 1, 4)
         );
     }
 

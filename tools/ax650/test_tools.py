@@ -121,7 +121,7 @@ class PackageTests(unittest.TestCase):
         settings = json.loads((output / "resources/voice-settings.json").read_text())
         self.assertFalse(settings["enabled"])
         self.assertEqual(settings["mode"], "transcription")
-        self.assertEqual(settings["asr_threads"], 1)
+        self.assertEqual(settings["asr_threads"], 2)
         self.assertEqual(settings["model_dir"], "@desktop-pet-resources/models")
         manifest = (output / "package-manifest.json").read_text()
         self.assertNotIn(str(self.root), manifest)
@@ -129,6 +129,34 @@ class PackageTests(unittest.TestCase):
         with tarfile.open(archive) as tar:
             self.assertIn("bundle/run.sh", tar.getnames())
             self.assertTrue(all(not member.issym() for member in tar.getmembers()))
+
+    def test_axera_manifest_requires_all_parts_and_rejects_escape(self):
+        directory = self.root / "axera"
+        for name in ("sensevoice/sensevoice.axmodel", "sensevoice/tokens.txt",
+                     "zipvoice/encoder.axmodel", "zipvoice/vocos_full.axmodel",
+                     "zipvoice/tokens.txt", "zipvoice/lexicon.txt",
+                     *(f"zipvoice/decoder_part{i}.axmodel" for i in range(4)),
+                     "zipvoice/espeak-ng-data/phondata"):
+            path = directory / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"fixture")
+        manifest = {"version": 1, "encoder": {"file": "encoder.axmodel"},
+                    "decoder_parts": [{"file": f"decoder_part{i}.axmodel"} for i in range(4)]}
+        path = directory / "zipvoice/decoder4_split_manifest.json"
+        path.write_text(json.dumps(manifest))
+        files = packaging.axera_model_files(directory)
+        self.assertTrue(any(target.name == "sensevoice.axmodel" for _, target in files))
+        self.assertFalse(any(target.suffix == ".onnx" for _, target in files))
+        part = directory / "zipvoice/decoder_part3.axmodel"
+        part.unlink()
+        with self.assertRaises(packaging.PackageError):
+            packaging.axera_model_files(directory)
+        part.write_bytes(b"fixture")
+        for name in ("../outside.axmodel", "/etc/passwd"):
+            manifest["decoder_parts"][0]["file"] = name
+            path.write_text(json.dumps(manifest))
+            with self.assertRaises(packaging.PackageError):
+                packaging.axera_model_files(directory)
 
     def test_path_escape_and_absolute_references_fail_before_output(self):
         for reference in ("../outside.json", "/etc/passwd", "model/../outside.json", "model\\outside.json"):
@@ -258,6 +286,9 @@ class DependenciesTests(unittest.TestCase):
         self.assertIn("libxdo.so.3", complete["loaded"])
         self.assertNotIn("libwebkit2gtk-4.1.so.0", diagnostic["loaded"])
         self.assertNotIn("libasound.so.2", diagnostic["loaded"])
+        self.assertIn("libsherpa-onnx-c-api.so", complete["loaded"])
+        self.assertIn("libax_engine.so", complete["loaded"])
+        self.assertNotIn("libax_engine.so", diagnostic["loaded"])
 
     def test_missing_dynamic_xkb_library_or_symbol_fails(self):
         def missing_library(name):
@@ -277,7 +308,7 @@ class LauncherTests(unittest.TestCase):
         })
         self.assertEqual(env["DISPLAY"], ":2")
         self.assertEqual(env["XAUTHORITY"], "/existing/session.auth")
-        self.assertEqual(env["LD_LIBRARY_PATH"], "/private-package/lib:/existing/lib")
+        self.assertEqual(env["LD_LIBRARY_PATH"], "/private-package/lib:/soc/lib:/existing/lib")
         self.assertNotIn("VK_ICD_FILENAMES", env)
 
     def test_finds_existing_bus_only_on_matching_desktop_and_returns_no_secrets(self):
