@@ -10,7 +10,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "dev.desktoppet.web-search.brave";
+#[cfg(target_os = "macos")]
 const KEYCHAIN_ACCOUNT: &str = "default";
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 

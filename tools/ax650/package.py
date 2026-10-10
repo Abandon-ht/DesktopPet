@@ -13,10 +13,25 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOLS = Path(__file__).resolve().parent
-BINARIES = ("desktop-pet-ax650", "avatar-host-2d")
+BINARIES = ("desktop-pet", "avatar-host-2d")
+CLI_BINARY = "desktop-pet-ax650"
+ASR_DIRECTORY = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09"
+TTS_DIRECTORY = "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia"
+KWS_DIRECTORY = "sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20"
+MODEL_FILES = (
+    "silero_vad.onnx", f"{ASR_DIRECTORY}/model.int8.onnx", f"{ASR_DIRECTORY}/tokens.txt",
+    "vocos_24khz.onnx", *(f"{TTS_DIRECTORY}/{name}" for name in
+                           ("encoder.int8.onnx", "decoder.int8.onnx", "tokens.txt", "lexicon.txt")),
+    *(f"{KWS_DIRECTORY}/{name}" for name in (
+        "encoder-epoch-13-avg-2-chunk-16-left-64.onnx", "decoder-epoch-13-avg-2-chunk-16-left-64.onnx",
+        "joiner-epoch-13-avg-2-chunk-16-left-64.onnx", "tokens.txt", "en.phone")),
+)
+NOTICE_FILES = tuple(f"{category}.zip.sources.md" for category in
+                     ("avatar", "voice", "models-vad", "models-asr", "models-tts", "models-kws"))
 RUNTIME_LIBRARIES = {
     "libxkbcommon-x11.so.0": "libxkbcommon-x11-0.copyright",
     "libxcb-xkb.so.1": "libxcb-xkb1.copyright",
+    "libxdo.so.3": "libxdo3.copyright",
 }
 MAX_JSON = 1024 * 1024
 MAX_FILE = 32 * 1024 * 1024
@@ -248,61 +263,169 @@ def runtime_files(directory):
     return files
 
 
+def private_resource_file(root, relative, max_bytes=512 * 1024 * 1024):
+    require(not root.is_symlink(), "resource directory symlink rejected")
+    path = root / relative
+    require(path.is_relative_to(root) and ".." not in relative.parts, "escaping resource reference rejected")
+    for current in (path, *path.parents):
+        if current == root:
+            break
+        require(not current.is_symlink(), "resource symlinks are unsupported")
+    require(path.is_file() and stat.S_ISREG(path.stat().st_mode), f"missing resource: {relative}")
+    require(0 < path.stat().st_size <= max_bytes, f"empty or oversized resource: {relative}")
+    require(not path.name.startswith((".env", "id_rsa", "id_ed25519"))
+            and path.suffix not in (".pem", ".pfx", ".sqlite3", ".sqlite", ".key"), "private config/credential resource rejected")
+    return path
+
+
+def model_files(directory, full_voice_models=False):
+    require(directory is not None, "full application requires --models with CPU VAD/ASR resources")
+    selected = MODEL_FILES if full_voice_models else MODEL_FILES[:3]
+    files = [(private_resource_file(directory, Path(name)), Path("resources/models") / name)
+             for name in selected]
+    for subdirectory in (ASR_DIRECTORY, TTS_DIRECTORY, KWS_DIRECTORY):
+        for name in ("README.md", "LICENSE", "LICENSE.txt", "COPYING", "NOTICE"):
+            relative = Path(subdirectory) / name
+            if (directory / relative).exists():
+                files.append((private_resource_file(directory, relative, MAX_JSON), Path("resources/models") / relative))
+    if full_voice_models:
+        espeak = directory / TTS_DIRECTORY / "espeak-ng-data"
+        require(espeak.is_dir() and not espeak.is_symlink(), "TTS requires regular espeak-ng-data directory")
+        data_files = sorted(espeak.rglob("*"))
+        require(data_files and not any(path.is_symlink() for path in data_files), "empty or symlink espeak data rejected")
+        for path in data_files:
+            if path.is_file():
+                relative = path.relative_to(directory)
+                files.append((private_resource_file(directory, relative, MAX_FILE), Path("resources/models") / relative))
+    require(len(files) <= 2048 and sum(source.stat().st_size for source, _ in files) <= 1024 * 1024 * 1024,
+            "model resource budget exceeded")
+    return files
+
+
+def voice_files(directory):
+    if directory is None:
+        return []
+    require(not directory.is_symlink(), "voice directory symlink rejected")
+    files = []
+    for language in ("zh-CN", "en-US", "ja-JP", "ko-KR"):
+        for category in ("greetings", "care", "intimacy"):
+            base = directory / language / category
+            if not base.is_dir():
+                continue
+            require(not base.is_symlink(), "voice directory symlink rejected")
+            for path in sorted(base.rglob("*")):
+                require(not path.is_symlink(), "voice symlink rejected")
+                if not path.is_file() or path.suffix not in (".wav", ".txt"):
+                    continue
+                relative = path.relative_to(directory)
+                source = private_resource_file(directory, relative, MAX_FILE)
+                if path.suffix == ".wav":
+                    with source.open("rb") as stream:
+                        header = stream.read(12)
+                    require(header[:4] == b"RIFF" and header[8:12] == b"WAVE", "invalid WAV header")
+                files.append((source, Path("resources/voice") / relative))
+    require(files and len(files) <= 1024 and sum(source.stat().st_size for source, _ in files) <= 256 * 1024 * 1024,
+            "voice resource budget exceeded or no supported localized audio")
+    private_resource_file(directory, Path("zh-CN/greetings/noon.wav"), MAX_FILE)
+    private_resource_file(directory, Path("zh-CN/greetings/noon.txt"), MAX_JSON)
+    return files
+
+
+def notice_files(directory):
+    files = [(ROOT / "docs/ASSETS.md", Path("resources/notices/resource-sources.md"))]
+    if directory is not None:
+        files.extend((private_resource_file(directory, Path(name), MAX_JSON), Path("resources/notices") / name)
+                     for name in NOTICE_FILES)
+    return files
+
+
 def copy_file(source, destination, executable=False):
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
     destination.chmod(0o755 if executable else 0o644)
 
 
-README = """DesktopPet AX650 私有端侧开发包
+README = """DesktopPet AX650 私有完整桌宠开发包
 
 目标：Ubuntu 22.04 ARM64 / 当前 XFCE X11 / CPU llvmpipe。
 默认 OpenGL 软件渲染，320×384（scale 64），目标调度 20 fps。
-运行 ./run.sh；或 ./run.sh --scale 64 --fps 20 --seconds 120。
+运行 ./run.sh；或 ./run.sh --scale 64 --fps 20。
+包含 Tauri 设置与托盘、角色交互、养成存档与 CPU 语音模型。
+首次打开设置；关闭设置后通过真实 XFCE 托盘重开或退出。
 先检查依赖：./run.sh --check-only（不连接桌面、不会启动角色）。
 --backend vulkan 是诊断入口，此板 Vulkan 空白原因尚未定位。
 --model、--data-dir、--log-dir 可设置独立角色、存档和本次日志目录。
 从 SSH 启动默认 DISPLAY=:0；它是 X11 会话编号，不是 HDMI 接口编号。
 沿用用户 XAUTHORITY；缺省时仅引用已有、可读的 LXDM :0 凭证，不复制凭证。
-Ctrl+C/quit 由 Rust 主进程执行正常关闭；详细终端命令见 --help。
+从 SSH 启动需已有正确的 XFCE 会话总线；启动器可从同用户、同 DISPLAY
+的 xfce4-session/panel/xfwm4 环境读取总线，找不到则退出，不创建新总线。
+可选 --cli 启动文字诊断程序；--seconds 仅在 --cli 模式可用。
 
-本包包含 Rust 端侧主进程与独立角色宿主，不含 Tauri/WebKit/托盘。
-语音模型、NPU 推理、联网和其他应用窗口吸附不属于本阶段。
+语音、KWS、问候与联网默认关闭。麦克风接入后在设置中启用并测试。
+ASR/VAD/TTS/KWS 使用 CPU，外部 LLM 服务由用户配置；NPU 尚未接入。
+软件 WebKit 设置关闭加速合成，保留 WebKit sandbox。
 data/ 与 logs/ 保留本包的独立存档和运行记录，移动包时可一并保留。
 日志和 CPU 提交/present 统计不能替代用户目视的角色/透明/交互验收。
 稳定 30 fps 不作为验收门槛。
 
 角色资源仅供用户私有验证，版权和再分发权利未核实，不得公开上传。
-可选 lib/ 只含 Ubuntu XKB 运行库及其许可证；GL/EGL/Mesa 驱动由板上提供。
+可选 lib/ 只含 Ubuntu XKB / xdo 运行库及其许可证；GL/EGL/Mesa 驱动由板上提供。
 普通启动也会先做动态加载预检，结果保存在 runtime-deps.json。
 检查通过仅代表运行库可加载，不能证明桌面授权、合成器或渲染成功。
 本包不安装软件、不改桌面服务，也不包含 VNC/Remote Desktop 测试工具。
 """
 
 
-def package(binaries, avatar, runtime_libs, output):
+def package(binaries, avatar, runtime_libs, output, models=None, voice=None, notices=None, include_cli=False,
+            full_voice_models=False):
     output, archive, archive_checksum = output_paths(output)
-    binary_info = {name: verify_elf(binaries / name) for name in BINARIES}
+    names = BINARIES + ((CLI_BINARY,) if include_cli else ())
+    binary_info = {name: verify_elf(binaries / name) for name in names}
     avatar_root, assets, manifest = avatar_files(avatar)
     libraries = runtime_files(runtime_libs)
+    extra_resources = model_files(models, full_voice_models) + voice_files(voice) + notice_files(notices)
     try:
         output.mkdir(parents=True)
-        for name in BINARIES:
+        for name in names:
             copy_file(binaries / name, output / name, executable=True)
         for source in assets:
             copy_file(source, output / "resources/avatar" / source.relative_to(avatar_root))
         for source, relative in libraries:
             copy_file(source, output / relative)
+        for source, relative in extra_resources:
+            copy_file(source, output / relative)
+        resources = output / "resources"
+        (resources / "model-path.txt").write_text("avatar/manifest.json\n", encoding="utf-8")
+        (resources / "show-settings-on-launch").touch()
+        (resources / "dev-data-dir.txt").write_text("data\n", encoding="utf-8")
+        settings = dict(
+            enabled=False, kws_enabled=False, wake_greeting_enabled=False, timed_greetings_enabled=False,
+            first_greeting_enabled=False, web_enabled=False, asr_backend="sherpa_onnx",
+            model_dir="@desktop-pet-resources/models", mode="transcription", input_device_name="",
+            asr_threads=1, asr_gpu=False,
+            tts_threads=2, tts_gpu=False, kws_threads=1, output_volume_percent=100,
+        )
+        if voice is not None:
+            settings.update(
+                greeting_dir="@desktop-pet-resources/voice",
+                reference_audio="@desktop-pet-resources/voice/zh-CN/greetings/noon.wav",
+                reference_text=(voice / "zh-CN/greetings/noon.txt").read_text(encoding="utf-8").strip(),
+            )
+        (resources / "voice-settings.json").write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        copy_file(ROOT / "apps/desktop/icons/icon.png", resources / "icon.png")
         for name in ("run.sh", "launch.py", "runtime-deps.py"):
             copy_file(TOOLS / name, output / name, executable=True)
         (output / "README.txt").write_text(README, encoding="utf-8")
         info = {
             "schema_version": 1,
-            "scope": "Private Ubuntu 22.04 AArch64 AX650 X11 software-rendering development package",
+            "scope": "Private Ubuntu 22.04 AArch64 AX650 complete Tauri desktop pet with CPU voice resources",
             **source_metadata(),
             "binaries": binary_info, "default_backend": "gl",
+            "entrypoint": "desktop-pet", "diagnostic_cli": include_cli,
+            "voice_models": ["vad", "asr", "tts", "kws"] if full_voice_models else ["vad", "asr"],
+            "localized_voice": voice is not None,
             "avatar_license": {key: manifest["license"].get(key) for key in ("status", "redistributable")},
-            "runtime_libraries": list(RUNTIME_LIBRARIES) if libraries else [],
+            "runtime_libraries": [target.name for _, target in libraries if target.parent == Path("lib")],
             "files": {path.relative_to(output).as_posix(): digest(path)
                       for path in sorted(output.rglob("*")) if path.is_file()},
         }
@@ -328,15 +451,23 @@ def main():
     parser.add_argument("--runtime-libs", type=Path,
                         help="directory with the two whitelisted regular XKB .so files and licenses/")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--models", type=Path, help="explicit CPU VAD/ASR/TTS/KWS model root")
+    parser.add_argument("--voice", type=Path, help="optional localized WAV/TXT root with Chinese noon reference")
+    parser.add_argument("--notices", type=Path, help="optional original resource provenance notices")
+    parser.add_argument("--include-cli", action="store_true", help="also include the renderer diagnostic CLI")
+    parser.add_argument("--full-voice-models", action="store_true", help="include CPU TTS/KWS/espeak in addition to VAD/ASR")
     parser.add_argument("--verify-binaries", type=Path, help="ELF/GLIBC checks only; no package or execution")
     args = parser.parse_args()
     try:
         if args.verify_binaries:
-            require(not any((args.binaries, args.avatar, args.runtime_libs, args.output)), "verification mode cannot create a package")
-            print(json.dumps({name: verify_elf(args.verify_binaries / name) for name in BINARIES}, indent=2))
+            require(not any((args.binaries, args.avatar, args.runtime_libs, args.output, args.models, args.voice, args.notices)),
+                    "verification mode cannot create a package")
+            names = BINARIES + ((CLI_BINARY,) if args.include_cli else ())
+            print(json.dumps({name: verify_elf(args.verify_binaries / name) for name in names}, indent=2))
         else:
             require(all((args.binaries, args.avatar, args.output)), "--binaries, --avatar and --output are required")
-            for path in package(args.binaries, args.avatar, args.runtime_libs, args.output):
+            for path in package(args.binaries, args.avatar, args.runtime_libs, args.output,
+                                args.models, args.voice, args.notices, args.include_cli, args.full_voice_models):
                 print(path)
     except (PackageError, OSError, UnicodeError, json.JSONDecodeError, struct.error, TypeError,
             subprocess.CalledProcessError) as error:

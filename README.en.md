@@ -4,13 +4,13 @@ DesktopPet is a macOS-first desktop companion built with Rust, Tauri 2, and a se
 
 The repository includes runnable P1–P3 development code, architecture documents, and validation tools. The current macOS release workflow is manual and packages a Live2D character plus voice and speech-model resources from separate ZIP files. Port prerequisites and blockers are in [Windows build preparation](BUILDING.windows.md) and [Linux build preparation](BUILDING.linux.md). See [Building for macOS](BUILDING.md), [asset provenance](docs/ASSETS.md), and the [Chinese README](README.md) for the detailed development record.
 
-The `ax650` branch starts from the Linux X11 baseline and targets AX650N boards running Ubuntu 22.04 ARM64 with XFCE, using CPU software OpenGL. Its first stage adds a native Rust controller for the avatar process, care state, and SQLite persistence without WebKit or speech. A previous private renderer package has displayed a small avatar on the board; the new controller and persistence need separate user validation. Stable 30 fps is not required. See the Chinese [AX650 build and test guide](BUILDING.ax650.zh-CN.md) and [implementation plan](docs/26-ax650-edge.md).
+The `ax650` branch starts from the Linux X11 baseline and targets the full desktop companion on AX650N boards running Ubuntu 22.04 ARM64 with XFCE: tray, settings, care state, persistence, and microphone speech recognition. It reuses the Tauri app and avatar process with CPU software OpenGL. A transcription mode uses VAD and SenseVoice without requiring LLM or TTS services; conversation and playback remain optional. The terminal controller is a diagnostic tool. A previous private package displayed a small avatar, while the full UI and microphone path require separate board testing by the user. Stable 30 fps is not required. See the Chinese [AX650 build and test guide](BUILDING.ax650.zh-CN.md) and [implementation plan](docs/26-ax650-edge.md).
 
 ## Architecture
 
 - `apps/desktop`: Tauri tray application, settings, care state, and voice orchestration.
 - `apps/avatar-host-2d`: native transparent avatar window and rendering process.
-- `apps/ax650`: native AX650 controller with terminal commands, care state, and persistence.
+- `apps/ax650`: diagnostic terminal controller for the AX650 renderer and care lifecycle.
 - `crates/`: core state, protocol, character packs, persistence, IPC, and voice modules.
 - `tools/`: validation, packaging, and local development utilities.
 - `docs/`: design decisions, testing records, and staged implementation notes. The detailed historical notes are currently in Chinese; the build, asset, and project-use documents are available in English.

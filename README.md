@@ -35,11 +35,11 @@ Contributors and users must not use this project to create or distribute sexuali
 | [长期记忆](docs/23-long-term-memory.md) | 跨会话存储、自动提取与压缩、召回、用户管理和验收边界 |
 | [P3-W 联网查询与受限 Agent](docs/24-p3-web-agent.md) | 搜索服务、只读工具循环、来源展示、测试方式与当前限制 |
 | [Linux X11 第一阶段](docs/25-linux-x11-implementation.md) | 离线构建、RTX 5090 透明窗口、原生输入与屏幕存档的实测边界 |
-| [AX650 端侧实现](docs/26-ax650-edge.md) | ARM64 软件 GL、无语音 Rust 主程序、养成存档、用户测试与后续加速规划 |
+| [AX650 完整桌宠](docs/26-ax650-edge.md) | ARM64 软件 GL、Tauri 托盘与设置、养成、CPU 语音识别及板端用户测试 |
 
 Linux X11 的首次构建与单屏透明角色交互已在 Ubuntu 22.04 / xfwm4 / RTX 5090 验证；已补齐当前 XFCE 的真实托盘，并提供无语音私有交互测试包工具和手动 AppImage 预发布工作流；这是实验开发基线，完整设置交互、语音和通用安装包仍需后续验收，见 [Linux 开发记录](docs/25-linux-x11-implementation.md)。
 
-`ax650` 分支基于 Linux X11，面向无通用着色器 GPU 的 AX650N / Ubuntu 22.04 ARM64 板卡。第一阶段使用 `apps/ax650` 原生 Rust 主程序、独立角色宿主和 CPU 软件 OpenGL，复用养成与 SQLite 存档；此前私有包已由用户确认小尺寸角色可见，本分支的新交互和存档需独立验收，不要求稳定 30 fps。构建及用户手动测试见 [AX650 说明](BUILDING.ax650.zh-CN.md)。
+`ax650` 分支基于 Linux X11，面向无通用着色器 GPU 的 AX650N / Ubuntu 22.04 ARM64 板卡，目标包含完整桌宠、托盘、设置、养成存档和麦克风语音识别。主入口复用 `apps/desktop` 的 Tauri 应用和独立角色宿主，默认 CPU 软件 OpenGL；新增“仅识别并显示文字”模式，可先使用 VAD / SenseVoice 测试 ASR，再按需配置 LLM / TTS。`apps/ax650` 的终端程序保留为诊断工具。此前私有包已由用户确认小尺寸角色可见；完整 UI 和麦克风识别由用户在板端分别验收，不要求稳定 30 fps。构建、资源与测试见 [AX650 说明](BUILDING.ax650.zh-CN.md)。
 
 关键结论：
 

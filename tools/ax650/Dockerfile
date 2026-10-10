@@ -28,7 +28,9 @@ RUN mkdir -p /tmp/rust-install && cd /tmp/rust-install && \
     rm -rf /tmp/rust-install
 # Packaging records source metadata. Keep this layer after the toolchain so
 # existing compiler caches are preserved when adding the packaging dependency.
-RUN apt-get update && apt-get install --yes --no-install-recommends git procps && \
+RUN apt-get update && apt-get install --yes --no-install-recommends \
+      git procps libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+      libayatana-appindicator3-dev librsvg2-dev libasound2-dev && \
     rm -rf /var/lib/apt/lists/*
 ENV PATH=/opt/rust/bin:$PATH CARGO_TARGET_DIR=/target CARGO_HOME=/cargo
 WORKDIR /workspace

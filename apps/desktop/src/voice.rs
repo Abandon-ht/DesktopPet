@@ -1,6 +1,6 @@
 use pet_voice_session::{
-    NoSpeechTimeout, TurnToken, VoicePipeline, VoiceSettings, VoiceStatus, listen_for_keyword,
-    local_pipeline_with_memory, play_wav_with_volume,
+    ConfiguredPipeline, NoSpeechTimeout, TurnToken, VoiceMode, VoiceSettings, VoiceStatus,
+    listen_for_keyword, local_configured_pipeline_with_memory, play_wav_with_volume,
 };
 use std::path::PathBuf;
 use std::sync::{
@@ -208,8 +208,7 @@ impl VoiceController {
     /// Only a head hit uses the prerecorded wake greeting.
     pub fn head_click(&self) {
         let settings = self.settings();
-        let clips = settings
-            .wake_greeting_enabled
+        let clips = (settings.wake_greeting_enabled && settings.mode == VoiceMode::Conversation)
             .then(|| cue_path(&settings, *self.inner.language.lock().unwrap(), Cue::Wake))
             .flatten()
             .into_iter()
@@ -223,7 +222,10 @@ impl VoiceController {
 
     pub fn cues_if_idle(&self, cues: &[Cue]) -> bool {
         let settings = self.settings();
-        if !settings.enabled || settings.greeting_dir.as_os_str().is_empty() {
+        if !settings.enabled
+            || settings.mode == VoiceMode::Transcription
+            || settings.greeting_dir.as_os_str().is_empty()
+        {
             return false;
         }
         let language = *self.inner.language.lock().unwrap();
@@ -354,7 +356,7 @@ fn run(inner: Arc<Inner>, receiver: mpsc::Receiver<()>) {
             self.0.store(false, Ordering::Release);
         }
     }
-    let mut loaded: Option<VoicePipeline> = None;
+    let mut loaded: Option<ConfiguredPipeline> = None;
     let mut loaded_revision = u64::MAX;
     while receiver.recv().is_ok() {
         if inner.stopped.load(Ordering::Acquire) {
@@ -412,7 +414,7 @@ fn run(inner: Arc<Inner>, receiver: mpsc::Receiver<()>) {
         }
         if loaded_revision != revision || loaded.is_none() {
             loaded = None;
-            match local_pipeline_with_memory(&settings, inner.memory_path.clone()) {
+            match local_configured_pipeline_with_memory(&settings, inner.memory_path.clone()) {
                 Ok(pipeline) => {
                     loaded = Some(pipeline);
                     loaded_revision = revision;
@@ -438,8 +440,11 @@ fn run(inner: Arc<Inner>, receiver: mpsc::Receiver<()>) {
             }
             let turn_id = inner.turn_sequence.fetch_add(1, Ordering::AcqRel) + 1;
             let token = TurnToken::for_turn(inner.generation.clone(), session_id, turn_id);
-            let result = loaded.as_mut().unwrap().run(&token, |status| {
+            let result = loaded.as_mut().unwrap().run(&token, |mut status| {
                 if token.is_current() {
+                    if settings.mode == VoiceMode::Transcription && status.transcript.is_empty() {
+                        status.transcript = inner.status.lock().unwrap().transcript.clone();
+                    }
                     *inner.status.lock().unwrap() = status;
                 }
             });
@@ -454,11 +459,20 @@ fn run(inner: Arc<Inner>, receiver: mpsc::Receiver<()>) {
                     if completed >= 10 {
                         let mut status = inner.status.lock().unwrap();
                         status.phase = "idle".into();
-                        status.detail = "已完成 10 轮对话；再次点击可继续".into();
+                        status.detail = if settings.mode == VoiceMode::Transcription {
+                            "已完成 10 段识别；再次点击可继续"
+                        } else {
+                            "已完成 10 轮对话；再次点击可继续"
+                        }
+                        .into();
                         break;
                     }
                     // Let the final speaker buffer drain before rearming VAD.
-                    for _ in 0..18 {
+                    for _ in 0..if settings.mode == VoiceMode::Transcription {
+                        1
+                    } else {
+                        18
+                    } {
                         if !session.is_current() {
                             break;
                         }
@@ -468,8 +482,15 @@ fn run(inner: Arc<Inner>, receiver: mpsc::Receiver<()>) {
                 Err(error) if error.downcast_ref::<NoSpeechTimeout>().is_some() => {
                     let mut status = inner.status.lock().unwrap();
                     status.phase = "idle".into();
-                    status.detail =
-                        format!("{} 秒无语音，对话已结束", settings.no_speech_timeout_secs);
+                    status.detail = format!(
+                        "{} 秒无语音，{}已结束",
+                        settings.no_speech_timeout_secs,
+                        if settings.mode == VoiceMode::Transcription {
+                            "识别"
+                        } else {
+                            "对话"
+                        }
+                    );
                     break;
                 }
                 Err(error) => {

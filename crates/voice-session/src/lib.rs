@@ -3,7 +3,8 @@
 
 mod local;
 pub use local::{
-    listen_for_keyword, local_pipeline, local_pipeline_with_memory, play_wav, play_wav_with_volume,
+    input_devices, listen_for_keyword, local_configured_pipeline_with_memory, local_pipeline,
+    local_pipeline_with_memory, play_wav, play_wav_with_volume,
 };
 
 use anyhow::{Result, bail};
@@ -49,10 +50,21 @@ pub enum TtsBackend {
     Kokoro,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceMode {
+    #[default]
+    Conversation,
+    Transcription,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VoiceSettings {
     pub enabled: bool,
+    pub mode: VoiceMode,
+    /// Empty chooses the system default; otherwise match a CPAL device name exactly.
+    pub input_device_name: String,
     pub asr_backend: AsrBackend,
     pub llm_backend: LlmBackend,
     pub tts_backend: TtsBackend,
@@ -110,6 +122,8 @@ impl Default for VoiceSettings {
     fn default() -> Self {
         Self {
             enabled: false,
+            mode: VoiceMode::Conversation,
+            input_device_name: String::new(),
             asr_backend: AsrBackend::default(),
             llm_backend: LlmBackend::default(),
             tts_backend: TtsBackend::default(),
@@ -165,7 +179,24 @@ impl Default for VoiceSettings {
 }
 
 impl VoiceSettings {
+    /// Initial AX650 settings only; saved user choices still take precedence.
+    pub fn ax650_defaults() -> Self {
+        Self {
+            mode: VoiceMode::Transcription,
+            tts_threads: 2,
+            kokoro_threads: 1,
+            wake_greeting_enabled: false,
+            timed_greetings_enabled: false,
+            first_greeting_enabled: false,
+            ..Self::default()
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
+        let conversation = self.mode == VoiceMode::Conversation;
+        if self.input_device_name.chars().count() > 256 {
+            bail!("麦克风设备名称最多 256 字");
+        }
         if self.weather_city.chars().count() > 80 {
             bail!("默认天气城市最多 80 字");
         }
@@ -196,6 +227,7 @@ impl VoiceSettings {
             bail!("sherpa-mlx ASR 尚未接入");
         }
         if self.enabled
+            && conversation
             && !matches!(
                 self.llm_backend,
                 LlmBackend::LmStudio
@@ -206,10 +238,15 @@ impl VoiceSettings {
         {
             bail!("所选 LLM 后端尚未接入，请选择 LM Studio 或兼容 Chat Completions 的服务");
         }
-        if self.enabled && self.tts_backend != TtsBackend::SherpaOnnx {
+        if self.enabled && conversation && self.tts_backend != TtsBackend::SherpaOnnx {
             bail!("所选 TTS 后端尚未接入，请选择 sherpa-onnx");
         }
-        if self.enabled && (self.asr_gpu || self.asr_ncnn_gpu || self.tts_gpu || self.aec_enabled) {
+        if self.enabled
+            && (self.asr_gpu
+                || self.asr_ncnn_gpu
+                || (conversation && self.tts_gpu)
+                || self.aec_enabled)
+        {
             bail!("当前构建尚未接入 GPU 或 AEC；请关闭相应开关");
         }
         if self.enabled
@@ -229,12 +266,15 @@ impl VoiceSettings {
                 bail!("自定义唤醒词需指定经 sherpa-onnx text2token 转换的关键词文件");
             }
         }
+        if self.enabled && self.model_dir.as_os_str().is_empty() {
+            bail!("启用语音前需指定模型目录");
+        }
         if self.enabled
-            && (self.model_dir.as_os_str().is_empty()
-                || self.reference_audio.as_os_str().is_empty()
+            && conversation
+            && (self.reference_audio.as_os_str().is_empty()
                 || self.reference_text.trim().is_empty())
         {
-            bail!("启用语音前需指定模型目录、参考音频和对应文字");
+            bail!("启用语音对话前需指定参考音频和对应文字");
         }
         if !(1..=16).contains(&self.tts_threads) {
             bail!("TTS 线程数不在 1–16 范围内");
@@ -249,7 +289,7 @@ impl VoiceSettings {
         {
             bail!("预留后端的线程数或设备选择无效");
         }
-        if self.enabled && self.system_prompt.trim().is_empty() {
+        if self.enabled && conversation && self.system_prompt.trim().is_empty() {
             bail!("System Prompt 不能为空");
         }
         if self.system_prompt.chars().count() > 4000 {
@@ -269,7 +309,7 @@ impl VoiceSettings {
         {
             bail!("VAD 阈值、静音时长或无语音超时超出允许范围");
         }
-        if self.enabled {
+        if self.enabled && conversation {
             pet_inference_http::LmStudioBackend::new(pet_inference_http::LmStudioConfig::new(
                 &self.lm_studio_url,
                 &self.lm_studio_model,
@@ -378,6 +418,58 @@ pub struct VoicePipeline {
     pub llm: Box<dyn LlmPort>,
     pub tts: Box<dyn TtsPort>,
     pub playback: Box<dyn PlaybackPort>,
+}
+
+/// This path never owns an LLM, TTS, playback device or memory worker.
+pub struct TranscriptionPipeline {
+    pub input: Box<dyn InputPort>,
+    pub asr: Box<dyn AsrPort>,
+}
+
+pub enum ConfiguredPipeline {
+    Conversation(VoicePipeline),
+    Transcription(TranscriptionPipeline),
+}
+
+impl ConfiguredPipeline {
+    pub fn reset_session(&mut self) {
+        if let Self::Conversation(pipeline) = self {
+            pipeline.reset_session();
+        }
+    }
+    pub fn run(&mut self, token: &TurnToken, report: impl FnMut(VoiceStatus)) -> Result<()> {
+        match self {
+            Self::Conversation(pipeline) => pipeline.run(token, report),
+            Self::Transcription(pipeline) => pipeline.run(token, report),
+        }
+    }
+}
+
+impl TranscriptionPipeline {
+    pub fn run(&mut self, token: &TurnToken, mut report: impl FnMut(VoiceStatus)) -> Result<()> {
+        token.check()?;
+        let mut status = VoiceStatus {
+            phase: "listening".into(),
+            session_id: token.session_id(),
+            turn_id: token.id(),
+            ..Default::default()
+        };
+        report(status.clone());
+        let captured = self.input.capture(token)?;
+        token.check()?;
+        status.phase = "recognizing".into();
+        report(status.clone());
+        let transcript = self.asr.transcribe(&captured, token)?;
+        token.check()?;
+        if transcript.trim().is_empty() {
+            bail!("未识别到可用语音");
+        }
+        status.transcript = transcript;
+        status.phase = "idle".into();
+        status.detail = "识别完成；仅显示文字".into();
+        report(status);
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -510,6 +602,8 @@ mod tests {
         let old = r#"{"enabled":true,"model_dir":"/models","reference_audio":"/voice.wav","reference_text":"hello","lm_studio_url":"http://127.0.0.1:1234","lm_studio_model":"demo","tts_threads":8,"remember_context":true}"#;
         let settings: VoiceSettings = serde_json::from_str(old).unwrap();
         assert_eq!(settings.asr_backend, AsrBackend::SherpaOnnx);
+        assert_eq!(settings.mode, VoiceMode::Conversation);
+        assert!(settings.input_device_name.is_empty());
         assert_eq!(settings.llm_backend, LlmBackend::LmStudio);
         assert_eq!(settings.tts_backend, TtsBackend::SherpaOnnx);
         assert_eq!(settings.no_speech_timeout_secs, 8);
@@ -532,6 +626,44 @@ mod tests {
             ..VoiceSettings::default()
         };
         assert!(planned.validate().is_ok());
+    }
+
+    #[test]
+    fn transcription_settings_do_not_require_dialogue_or_reference_audio() {
+        let settings = VoiceSettings {
+            enabled: true,
+            mode: VoiceMode::Transcription,
+            model_dir: "/models".into(),
+            llm_backend: LlmBackend::Anthropic,
+            tts_backend: TtsBackend::Kokoro,
+            lm_studio_url: "not a URL".into(),
+            system_prompt: String::new(),
+            ..VoiceSettings::default()
+        };
+        assert!(settings.validate().is_ok());
+        assert!(
+            VoiceSettings {
+                mode: VoiceMode::Conversation,
+                ..settings.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            VoiceSettings {
+                asr_gpu: true,
+                ..settings
+            }
+            .validate()
+            .is_err()
+        );
+        let ax650 = VoiceSettings::ax650_defaults();
+        assert!(!ax650.enabled && !ax650.kws_enabled && !ax650.asr_gpu && !ax650.tts_gpu);
+        assert_eq!(ax650.mode, VoiceMode::Transcription);
+        assert_eq!(
+            (ax650.asr_threads, ax650.kws_threads, ax650.tts_threads),
+            (1, 1, 2)
+        );
     }
 
     #[test]
@@ -573,8 +705,10 @@ mod tests {
 
     #[test]
     fn recurring_birthday_accepts_leap_day_but_rejects_invalid_dates() {
-        let mut settings = VoiceSettings::default();
-        settings.birthday = "02-29".into();
+        let mut settings = VoiceSettings {
+            birthday: "02-29".into(),
+            ..VoiceSettings::default()
+        };
         assert!(settings.validate().is_ok());
         for invalid in ["2-29", "02-30", "00-10", "13-01", "06-31"] {
             settings.birthday = invalid.into();
@@ -671,5 +805,46 @@ mod tests {
         assert_eq!(last.phase, "idle");
         assert_eq!(last.transcript, "你好");
         assert_eq!(last.response, "答复。");
+    }
+
+    #[test]
+    fn transcription_finishes_with_text_and_rejects_stale_asr_results() {
+        let generation = Arc::new(AtomicU64::new(1));
+        let token = TurnToken::for_turn(generation.clone(), 1, 10);
+        let mut pipeline = TranscriptionPipeline {
+            input: Box::new(FixedInput),
+            asr: Box::new(FixedAsr),
+        };
+        let mut statuses = Vec::new();
+        pipeline
+            .run(&token, |status| statuses.push(status))
+            .unwrap();
+        assert_eq!(
+            statuses
+                .iter()
+                .map(|status| status.phase.as_str())
+                .collect::<Vec<_>>(),
+            ["listening", "recognizing", "idle"]
+        );
+        let final_status = statuses.last().unwrap();
+        assert_eq!(final_status.transcript, "你好");
+        assert!(final_status.response.is_empty() && final_status.sources.is_empty());
+        assert_eq!((final_status.session_id, final_status.turn_id), (1, 10));
+
+        struct CancelDuringAsr(Arc<AtomicU64>);
+        impl AsrPort for CancelDuringAsr {
+            fn transcribe(&mut self, _: &Pcm, _: &TurnToken) -> Result<String> {
+                self.0.store(2, Ordering::Release);
+                Ok("late result".into())
+            }
+        }
+        pipeline.asr = Box::new(CancelDuringAsr(generation));
+        let mut statuses = Vec::new();
+        assert!(
+            pipeline
+                .run(&token, |status| statuses.push(status))
+                .is_err()
+        );
+        assert!(statuses.iter().all(|status| status.transcript.is_empty()));
     }
 }

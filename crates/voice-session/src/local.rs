@@ -1,6 +1,7 @@
 use crate::{
-    AsrBackend, AsrPort, InputPort, LlmBackend, LlmPort, NoSpeechTimeout, Pcm, PlaybackPort,
-    TtsPort, TurnToken, VoicePipeline, VoiceSettings,
+    AsrBackend, AsrPort, ConfiguredPipeline, InputPort, LlmBackend, LlmPort, NoSpeechTimeout, Pcm,
+    PlaybackPort, TranscriptionPipeline, TtsPort, TurnToken, VoiceMode, VoicePipeline,
+    VoiceSettings,
 };
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use cpal::{
@@ -39,10 +40,9 @@ pub fn local_pipeline(settings: &VoiceSettings) -> Result<VoicePipeline> {
     local_pipeline_with_memory(settings, None)
 }
 
-pub fn local_pipeline_with_memory(
-    settings: &VoiceSettings,
-    memory_path: Option<PathBuf>,
-) -> Result<VoicePipeline> {
+type RecognitionPorts = (Box<dyn InputPort>, Box<dyn AsrPort>);
+
+fn recognition_ports(settings: &VoiceSettings) -> Result<RecognitionPorts> {
     settings.validate()?;
     let dir = &settings.model_dir;
     let vad_path = if settings.vad_model_path.as_os_str().is_empty() {
@@ -86,6 +86,47 @@ pub fn local_pipeline_with_memory(
         }
         AsrBackend::SherpaMlx => bail!("sherpa-mlx ASR 尚未接入"),
     };
+
+    Ok((
+        Box::new(MicrophoneVAD {
+            model: vad_model,
+            threshold: settings.vad_threshold,
+            silence_ms: settings.vad_silence_ms,
+            no_speech_timeout_secs: settings.no_speech_timeout_secs,
+            input_device_name: settings.input_device_name.clone(),
+        }),
+        asr,
+    ))
+}
+
+pub fn local_configured_pipeline_with_memory(
+    settings: &VoiceSettings,
+    memory_path: Option<PathBuf>,
+) -> Result<ConfiguredPipeline> {
+    match settings.mode {
+        VoiceMode::Conversation => {
+            local_pipeline_with_memory(settings, memory_path).map(ConfiguredPipeline::Conversation)
+        }
+        VoiceMode::Transcription => {
+            let (input, asr) = recognition_ports(settings)?;
+            Ok(ConfiguredPipeline::Transcription(TranscriptionPipeline {
+                input,
+                asr,
+            }))
+        }
+    }
+}
+
+pub fn local_pipeline_with_memory(
+    settings: &VoiceSettings,
+    memory_path: Option<PathBuf>,
+) -> Result<VoicePipeline> {
+    ensure!(
+        settings.mode == VoiceMode::Conversation,
+        "仅转写模式应使用 local_configured_pipeline_with_memory"
+    );
+    let (input, asr) = recognition_ports(settings)?;
+    let dir = &settings.model_dir;
 
     let zip = if settings.tts_model_dir.as_os_str().is_empty() {
         dir.join("sherpa-onnx-zipvoice-distill-int8-zh-en-emilia")
@@ -157,12 +198,7 @@ pub fn local_pipeline_with_memory(
     };
 
     Ok(VoicePipeline {
-        input: Box::new(MicrophoneVAD {
-            model: vad_model,
-            threshold: settings.vad_threshold,
-            silence_ms: settings.vad_silence_ms,
-            no_speech_timeout_secs: settings.no_speech_timeout_secs,
-        }),
+        input,
         asr,
         llm: Box::new(LmStudioDialogue {
             backend: lm,
@@ -197,6 +233,43 @@ struct MicrophoneVAD {
     threshold: f32,
     silence_ms: u16,
     no_speech_timeout_secs: u16,
+    input_device_name: String,
+}
+
+/// Device discovery only: no stream is opened and no samples are captured.
+pub fn input_devices() -> Result<Vec<String>> {
+    let host = cpal::default_host();
+    let mut names = Vec::new();
+    for device in host.input_devices().context("无法枚举麦克风输入设备")? {
+        if let Ok(name) = device.name() {
+            names.push(name);
+        }
+    }
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+fn input_device(host: &cpal::Host, name: &str) -> Result<cpal::Device> {
+    if name.is_empty() {
+        return host
+            .default_input_device()
+            .context("没有麦克风输入设备；请接入麦克风并在设置中选择");
+    }
+    let mut matching = None;
+    for device in host.input_devices().context("无法枚举麦克风输入设备")? {
+        if device.name().ok().as_deref() == Some(name) {
+            ensure!(
+                matching.is_none(),
+                "存在多个同名麦克风：{name}；请在系统中设置默认麦克风，并清空应用内设备名称"
+            );
+            matching = Some(device);
+        }
+    }
+    if let Some(device) = matching {
+        return Ok(device);
+    }
+    bail!("找不到所选麦克风输入设备：{name}；请检查连接或重新选择")
 }
 
 impl InputPort for MicrophoneVAD {
@@ -214,7 +287,7 @@ impl InputPort for MicrophoneVAD {
         let vad =
             VoiceActivityDetector::create(&vad_config, 22.0).context("Silero VAD 加载失败")?;
         let host = cpal::default_host();
-        let device = host.default_input_device().context("没有麦克风输入设备")?;
+        let device = input_device(&host, &self.input_device_name)?;
         let supported = device
             .default_input_config()
             .context("无法读取麦克风格式或权限")?;
@@ -482,7 +555,7 @@ pub fn listen_for_keyword(
     let spotter = create_keyword_spotter(settings)?;
     let kws_stream = spotter.create_stream();
     let host = cpal::default_host();
-    let device = host.default_input_device().context("没有麦克风输入设备")?;
+    let device = input_device(&host, &settings.input_device_name)?;
     let supported = device
         .default_input_config()
         .context("无法读取麦克风格式或权限")?;
@@ -537,10 +610,10 @@ pub fn listen_for_keyword(
         kws_stream.accept_waveform(16000, &samples);
         while spotter.is_ready(&kws_stream) {
             spotter.decode(&kws_stream);
-            if let Some(result) = spotter.get_result(&kws_stream) {
-                if !result.keyword.is_empty() {
-                    return Ok(Some(result.keyword));
-                }
+            if let Some(result) = spotter.get_result(&kws_stream)
+                && !result.keyword.is_empty()
+            {
+                return Ok(Some(result.keyword));
             }
         }
     }
@@ -575,6 +648,36 @@ fn create_keyword_spotter(settings: &VoiceSettings) -> Result<KeywordSpotter> {
 #[cfg(test)]
 mod backend_tests {
     use super::*;
+
+    #[test]
+    fn transcription_factory_does_not_open_dialogue_tts_or_memory() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("silero_vad.onnx"), []).unwrap();
+        let ncnn = directory.path().join("ncnn");
+        std::fs::create_dir(&ncnn).unwrap();
+        for name in ["model.ncnn.param", "model.ncnn.bin", "tokens.txt"] {
+            std::fs::write(ncnn.join(name), []).unwrap();
+        }
+        let settings = VoiceSettings {
+            enabled: true,
+            mode: VoiceMode::Transcription,
+            asr_backend: AsrBackend::SherpaNcnn,
+            model_dir: directory.path().into(),
+            asr_ncnn_model_dir: ncnn,
+            lm_studio_url: "invalid URL must not be opened".into(),
+            tts_backend: crate::TtsBackend::Kokoro,
+            ..VoiceSettings::default()
+        };
+        // ncnn loads lazily on decode; this only verifies factory routing and
+        // avoids both native model calls and audio device access.
+        let pipeline = local_configured_pipeline_with_memory(
+            &settings,
+            Some(directory.path().join("missing-parent/care.sqlite3")),
+        )
+        .unwrap();
+        assert!(matches!(pipeline, ConfiguredPipeline::Transcription(_)));
+        assert!(!directory.path().join("missing-parent").exists());
+    }
 
     #[test]
     #[ignore = "requires Open-Meteo access"]
@@ -815,14 +918,13 @@ impl LlmPort for LmStudioDialogue {
             }
             answer
         };
-        if token.is_current() && memory_enabled {
-            if let Some(store) = self.memory.as_mut() {
-                if let Ok(Some((_, epoch))) = store.append_turn(text, &answer, utc_ms()) {
-                    if let Some(sender) = &self.memory_jobs {
-                        let _ = sender.try_send(MemoryJob { epoch });
-                    }
-                }
-            }
+        if token.is_current()
+            && memory_enabled
+            && let Some(store) = self.memory.as_mut()
+            && let Ok(Some((_, epoch))) = store.append_turn(text, &answer, utc_ms())
+            && let Some(sender) = &self.memory_jobs
+        {
+            let _ = sender.try_send(MemoryJob { epoch });
         }
         Ok(answer)
     }
@@ -1032,6 +1134,8 @@ impl PlaybackPort for SpeakerOutput {
     }
 }
 
+// CPAL stream construction receives explicit device, format and shared callback state.
+#[allow(clippy::too_many_arguments)]
 fn output_stream(
     device: &cpal::Device,
     config: &StreamConfig,

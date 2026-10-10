@@ -1,71 +1,88 @@
-# AX650 端侧工具
+# AX650 完整桌宠工具
 
-仅面向当前 Ubuntu 22.04 ARM64 / X11 软件渲染基线。程序实现和人工验收见 [AX650 设计与测试文档](../../docs/26-ax650-edge.md)。角色素材、测试包、存档与日志保留在 Git 忽略目录中。
+目标是 Ubuntu 22.04 ARM64 / XFCE X11 上的完整 `desktop-pet`：Tauri 设置和托盘、独立二维角色、养成存档及 CPU 语音识别。`desktop-pet-ax650` 仅作为可选文字诊断程序。设计与人工验收见 [AX650 文档](../../docs/26-ax650-edge.md)；角色、音频、模型、私有包和运行数据保持 Git 忽略。
 
-## 原生 ARM64 编译
+## ARM64 构建
 
-在 Apple Silicon 的 OrbStack 上启动原生 ARM64 Ubuntu 22.04 构建环境。构建上下文只包含此工具目录，避免将私有角色资源发送给镜像构建器：
+Apple Silicon 的 OrbStack 使用原生 ARM64 Ubuntu 22.04。构建上下文只包含工具目录，避免将私有资源发送给镜像构建器：
 
 ```sh
-docker build --platform linux/arm64 \
-  -f tools/ax650/Dockerfile \
-  -t desktoppet-ax650-build:20261010 tools/ax650
+docker build --platform linux/arm64 -f tools/ax650/Dockerfile \
+  -t desktoppet-ax650-desktop-build:20261010 tools/ax650
 
-mkdir -p artifacts/local/ax650-build/target artifacts/local/ax650-build/cargo
+mkdir -p artifacts/local/ax650-desktop/{target,cargo,native}
+bash tools/ax650/fetch-sherpa.sh artifacts/local/ax650-desktop/native
 docker run --rm --platform linux/arm64 \
-  -v "$PWD:/workspace:ro" \
-  -v "$PWD/artifacts/local/ax650-build/target:/target" \
-  -v "$PWD/artifacts/local/ax650-build/cargo:/cargo" \
-  desktoppet-ax650-build:20261010
+  -v "$PWD:/workspace" \
+  -v "$PWD/artifacts/local/ax650-desktop/target:/target" \
+  -v "$PWD/artifacts/local/ax650-desktop/cargo:/cargo" \
+  -v "$PWD/artifacts/local/ax650-desktop/native:/native:ro" \
+  -e SHERPA_ONNX_LIB_DIR=/native/sherpa-onnx-v1.13.8-linux-aarch64-static-lib/lib \
+  -e AX650_INCLUDE_CLI=1 \
+  desktoppet-ax650-desktop-build:20261010
 ```
 
-镜像固定 Ubuntu 22.04 基础镜像摘要，从官方站点下载 Rust 1.95.0 ARM64 独立工具链并验证 SHA-256。可传 `RUST_ARCHIVE_URL` 和 `RUST_ARCHIVE_SHA256` 使用预先下载的官方归档；指定摘要时不另行获取校验文件。镜像只准备 Rust CLI 和角色宿主的依赖，没有 WebKit、Tauri、语音运行时或桌面服务。
+工具链固定 Rust 1.95.0，基础系统固定 Ubuntu 22.04 镜像摘要；`fetch-sherpa.sh` 获取并校验官方 ARM64 1.13.8 静态归档。已有原生环境从源码根目录执行 `bash tools/ax650/build.sh /absolute/target`，目标目录也可使用 `CARGO_TARGET_DIR`。脚本检查 Ubuntu、ARM64、Rust 版本 / host 和 GTK / WebKit / ALSA / AppIndicator 开发依赖，执行 `cargo build --locked --release -p desktop-pet -p avatar-host-2d`。`AX650_INCLUDE_CLI=1` 额外构建诊断程序。
 
-已有匹配环境可以从源码根目录运行 `bash tools/ax650/build.sh /absolute/target`；省略参数时使用 `CARGO_TARGET_DIR`，再缺省时使用源码根目录的 `target/`。脚本检查 Ubuntu / 架构 / Rust 版本与 host，执行锁定依赖的 release 构建，并检查两文件的 AArch64 ELF、所需 GLIBC 不高于 2.35、直接动态依赖可解析。构建过程不启动角色或连接显示器。
+Tauri 构建脚本会在源码树生成已忽略的 `apps/desktop/gen/schemas/`，因此源码挂载需要可写；模型与原生库挂载保持只读。编译后检查 AArch64 ELF、GLIBC 需求不高于 2.35 和直接动态依赖。构建与这些检查均不启动应用、角色或录音。
 
-## 私有打包
+## 私有完整包
 
-在 Mac 或 Linux 的 Python 3.10 及以上与 Git 环境运行。输出目录、同名归档与归档摘要必须均为新路径；仓库内的输出路径必须被 Git 忽略。
+打包需要 Python 3.10 及以上和 Git。显式选择资源，不扫描其他用户目录；输出及归档必须是新路径，仓库内输出必须被 Git 忽略。
 
 ```sh
 python3 tools/ax650/package.py \
-  --binaries artifacts/local/ax650-build/target/release \
-  --avatar /absolute/private-avatar/manifest.json \
+  --binaries artifacts/local/ax650-desktop/target/release \
+  --avatar /absolute/private-resources/avatar/manifest.json \
+  --models /absolute/private-resources/models \
+  --full-voice-models \
+  --voice /absolute/private-resources/voice \
+  --notices /absolute/private-resources/notices \
   --runtime-libs /absolute/private-runtime/lib \
-  --output artifacts/local/ax650-build/DesktopPet-AX650
+  --include-cli \
+  --output artifacts/local/ax650-desktop/DesktopPet-AX650-Desktop
 ```
 
-`--runtime-libs` 可省略。提供时必须包含以下四个常规文件：
+`--models` 必须包含当前 Silero VAD 与 SenseVoice int8 模型及 tokens。`--full-voice-models` 额外包含当前 ZipVoice、Vocos、espeak-ng-data 和 Zipformer KWS；完整语音资源交付使用此选项。固定文件名沿用 [现有语音资源契约](../../docs/19-p3-voice-pipeline.md)。不复制可选 ncnn / MLX 运行时或 LLM 权重。
+
+`--voice` 可选，只复制受支持语言 `zh-CN`、`en-US`、`ja-JP`、`ko-KR` 下 `greetings`、`care`、`intimacy` 的 WAV / TXT，并校验 WAV 头。提供时需有中文 `greetings/noon.wav` 和匹配文字，用作包内可移动的 TTS 参考；不导入用户旧语音设置或凭证。`--notices` 可选，保留原资源归档的六份来源说明；项目 `docs/ASSETS.md` 始终附带。
+
+`--runtime-libs` 可省略，由目标系统提供运行库。提供时必须包含匹配 Ubuntu 22.04 ARM64 的以下六个常规文件，不能直接传软件包的软链接：
 
 ```text
 libxkbcommon-x11.so.0
 libxcb-xkb.so.1
+libxdo.so.3
 licenses/libxkbcommon-x11-0.copyright
 licenses/libxcb-xkb1.copyright
+licenses/libxdo3.copyright
 ```
 
-这两项应来自与板端相匹配的 Ubuntu 22.04 ARM64 软件包；构建容器中的 `/usr/lib/aarch64-linux-gnu/` 和 `/usr/share/doc/` 提供原文件。准备私有 `lib/` 时将软件包软链接指向的真实库内容复制为上述常规文件，不能将软链接直接交给打包器。其他库不会复制，尤其不会附带 GL/EGL/Mesa 驱动。省略私有库时由板端系统提供它们。
+其他库不会复制，GL / EGL / Mesa 驱动、GTK 和 WebKit 由目标系统提供。打包器只复制角色引用闭包和显式模型 / 音频白名单，拒绝越界路径、软链接、缺失文件、凭证及存档污染，并检查类型与资源预算。角色完整契约和模型实际加载由 Rust 主程序与宿主执行，静态检查不能代替加载或真实画面验收。
 
-脚本只复制模型、纹理、物理 / Pose / DisplayInfo / UserData、登记的动作与表情引用；未引用的文件不进入包。它拒绝软链接、绝对 / 越界引用、缺失资产、未支持类型、超出预算的资源和音频动作，并检查模型 JSON、MOC3 / PNG 头和 PNG 尺寸。完整的角色契约、参数和 Mocari 模型加载仍由 Rust 端侧主程序与宿主检查，静态打包检查不能代替实际模型加载。
+包内使用现有 Linux 布局：两个完整应用程序、可选诊断程序、`resources/avatar`、`resources/models`、`resources/voice`、来源与许可、启动器及预检。`resources/voice-settings.json` 使用可移动路径，默认转写模式、CPU ASR 1 / KWS 1 / TTS 2 线程；语音、关键词、问候和联网默认关闭，麦克风接入后由用户启用。`data/` 保留此包独立存档。
 
-输出包括 `desktop-pet-ax650`、`avatar-host-2d`、角色资源、启动与预检脚本、`README.txt`、`package-manifest.json`、`SHA256SUMS.txt`，以及目录名加 `.tar.gz` 的归档和 `.tar.gz.sha256`。元数据记录源码提交、分支和工作区是否有未提交变更，不记录准备机的私有路径或用户身份；生成包和角色均不得公开上传。
+生成 `package-manifest.json`、`SHA256SUMS.txt`、目录名加 `.tar.gz` 的归档和 `.tar.gz.sha256`。元数据记录源码提交 / 分支 / 是否有未提交变更以及所有文件摘要，不记录准备机私有路径或身份。资源与生成包只供私有测试，不能公开上传。
 
-## 板端启动与检查
+## 启动与预检
 
-将包放到新的私有路径，保留先前成功的包。运行前可在包目录核验 `sha256sum --check SHA256SUMS.txt`。
+将包放在新的板端私有目录，保留旧成功包。在包目录执行：
 
 ```sh
+sha256sum --check SHA256SUMS.txt
 ./run.sh --check-only
-./run.sh --scale 64 --fps 20 --seconds 120
+./run.sh --scale 64 --fps 20
 ```
 
-默认 GL 软件渲染；`--backend vulkan` 仅为诊断入口。普通启动也先做同样的动态依赖检查。预检不打开 X display，只加载 X11 / XKB 和当前后端的库、检查 XKB 符号；GL 预检不要求 Vulkan，Vulkan 预检不要求 GL。预检通过不代表驱动、桌面授权、合成器或像素正确。
+默认启动完整桌宠与设置窗口，关闭设置后通过真实托盘重开或退出。`--cli` 才启动诊断程序，`--seconds` 仅对该模式有效。支持 `--model`、`--data-dir`、`--log-dir`、`--backend gl|vulkan`、`--scale 50..150` 和 `--fps 1..30`；完整程序通过环境接收这些设置，已保存的角色大小优先于启动默认值。稳定 30 fps 不作为验收要求。
 
-启动器默认 `DISPLAY=:0`，保留用户已有的 `DISPLAY` 与 `XAUTHORITY`；只在缺少授权变量时引用已有、可读的 LXDM `:0` 授权文件，不复制凭证。`DISPLAY` 是 X 会话编号，不是 HDMI 接口编号。私有 `lib/` 加入子进程搜索路径，软件渲染限定在该运行环境中。
+启动器默认 `DISPLAY=:0`，保留用户已有显示与授权变量；缺省时引用已有、可读的 LXDM `:0` 授权文件，不复制凭证。完整模式缺少会话总线时，仅从同用户、同 DISPLAY 的既有 `xfce4-session` / `xfce4-panel` / `xfwm4` 进程环境提取总线；没有匹配会话就退出，不创建新 D-Bus。`DISPLAY` 是 X 会话编号，不是 HDMI 口编号。
 
-支持 `--model`、`--data-dir`、`--log-dir`、`--backend`、`--scale`、`--fps`、`--seconds`。默认资源与存档在包内；未指定 `--log-dir` 时每次在 `logs/` 创建新目录。启动器预检后替换为 Rust 主进程；心跳、交互、存档、角色日志和正常退出由 Rust 管理。`--check-only` 失败或成功也写入结果，明确标记未启动角色。
+角色默认 GL / llvmpipe 软件渲染、320×384、调度上限 20 fps。显式 GL alpha 兼容继续由宿主核验 ARGB visual 与合成器。设置页使用 `WEBKIT_DISABLE_COMPOSITING_MODE=1` 关闭加速合成，这是 [WebKit 官方环境变量](https://trac.webkit.org/wiki/EnvironmentVariables)；保留 WebKit sandbox。Vulkan 仅作诊断，历史空白问题尚未定位。
 
-## 工具回归检查
+普通启动也先做依赖预检。完整预检加载 X11 / XKB、当前图形后端以及 GTK / WebKit / AppIndicator / ALSA / xdo；`--cli --check-only` 只检查诊断程序的运行库。GL 不要求 Vulkan，Vulkan 不要求 GL。预检不连接桌面、不创建托盘、不加载模型、不录音；通过仅说明库可加载。每次生成独立日志目录，保存预检结果与启动配置，完整程序和宿主另写运行日志。
+
+## 工具回归
 
 ```sh
 python3 -m unittest discover -s tools/ax650 -p 'test_*.py' -v
@@ -73,4 +90,4 @@ bash -n tools/ax650/build.sh
 sh -n tools/ax650/run.sh
 ```
 
-回归使用临时 ELF / JSON / PNG 样本与模拟库加载，只验证架构、GLIBC、打包边界、运行库白名单、后端分支和预检行为，不启动角色、桌面或设备。真实角色、透明、点击、拖拽和退出由用户在板端验收；稳定 30 fps 不是通过条件。
+工具回归使用临时样本和模拟库 / 进程调用，检查架构、GLIBC、私有打包边界、模型选择、后端与应用模式隔离、既有桌面总线查找和启动配置；不启动应用。真实托盘、设置、角色、转写和麦克风仍由用户在板端验收，不安装 VNC 或用 Remote Desktop 代替。

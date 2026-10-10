@@ -2,6 +2,47 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+pub fn is_ax650() -> bool {
+    std::env::var_os("DESKTOPPET_DEVICE_PROFILE").is_some_and(|profile| profile == "ax650")
+}
+
+pub fn initial_scale() -> Result<u16> {
+    match std::env::var("DESKTOPPET_INITIAL_SCALE") {
+        Ok(value) => {
+            let scale = value
+                .parse::<u16>()
+                .context("invalid DESKTOPPET_INITIAL_SCALE")?;
+            anyhow::ensure!(
+                (50..=150).contains(&scale),
+                "DESKTOPPET_INITIAL_SCALE must be 50–150"
+            );
+            Ok(scale)
+        }
+        Err(std::env::VarError::NotPresent) => Ok(if is_ax650() { 64 } else { 100 }),
+        Err(error) => Err(error).context("invalid DESKTOPPET_INITIAL_SCALE"),
+    }
+}
+
+pub fn data_directory(
+    override_directory: Option<PathBuf>,
+    development_config: &Path,
+    fallback: impl FnOnce() -> Result<PathBuf>,
+) -> Result<PathBuf> {
+    if let Some(directory) = override_directory {
+        anyhow::ensure!(
+            directory.is_absolute(),
+            "DESKTOPPET_DATA_DIR must be an absolute path"
+        );
+        return Ok(directory);
+    }
+    if development_config.is_file() {
+        let configured = std::fs::read_to_string(development_config)?;
+        anyhow::ensure!(!configured.trim().is_empty(), "dev-data-dir.txt is empty");
+        return Ok(PathBuf::from(configured.trim()));
+    }
+    fallback()
+}
+
 pub struct Layout {
     pub host: PathBuf,
     pub resources: PathBuf,
@@ -65,6 +106,24 @@ impl Layout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_data_directory_takes_precedence_over_portable_config() {
+        let directory = data_directory(
+            Some("/opt/desktop-pet/data".into()),
+            Path::new("missing-development-config"),
+            || panic!("explicit data directory must not use app defaults"),
+        )
+        .unwrap();
+        assert_eq!(directory, Path::new("/opt/desktop-pet/data"));
+        assert!(
+            data_directory(
+                Some("relative-data".into()),
+                Path::new("missing"),
+                || unreachable!()
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn portable_layout_moves_resources_with_binaries_and_accepts_external_resources() {
         let layout = Layout::portable(Path::new("/opt/Desktop Pet"), None);

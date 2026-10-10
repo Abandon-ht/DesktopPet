@@ -19,7 +19,7 @@ invoke('ui_language').then(language => {
 const voiceMessage = document.querySelector('#voice-message');
 const voicePhases = {idle:'待机', starting:'准备中', listening:'聆听中', recognizing:'识别中', thinking:'生成回复', searching:'联网查询中', synthesizing:'合成语音', speaking:'播放中', faulted:'需要处理'};
 const voiceFields = {
-  enabled:'voice-enabled', asr_backend:'voice-asr-backend', llm_backend:'voice-llm-backend', tts_backend:'voice-tts-backend',
+  enabled:'voice-enabled', mode:'voice-mode', input_device_name:'voice-input-device', asr_backend:'voice-asr-backend', llm_backend:'voice-llm-backend', tts_backend:'voice-tts-backend',
   model_dir:'voice-model-dir', asr_model_path:'voice-asr-model-path', asr_threads:'voice-asr-threads', asr_gpu:'voice-asr-gpu',
   asr_ncnn_model_dir:'voice-asr-ncnn-model-dir', asr_ncnn_executable:'voice-asr-ncnn-executable', asr_ncnn_threads:'voice-asr-ncnn-threads', asr_ncnn_gpu:'voice-asr-ncnn-gpu',
   tts_model_dir:'voice-tts-model-dir', tts_threads:'voice-tts-threads', tts_gpu:'voice-tts-gpu', tts_speaker:'voice-tts-speaker', tts_service_url:'voice-tts-service-url',
@@ -38,11 +38,21 @@ function renderVoiceProviders() {
     const [kind, value] = panel.dataset.providerFor.split(':');
     panel.hidden = (kind === 'asr' ? asr : tts) !== value;
   }
-  const planned = tts !== 'sherpa_onnx' || ['anthropic','gemini'].includes(llm);
+  const transcription = voiceInput('mode').value === 'transcription';
+  for (const panel of document.querySelectorAll('[data-voice-conversation-only]')) panel.hidden = transcription;
+  const planned = !transcription && (tts !== 'sherpa_onnx' || ['anthropic','gemini'].includes(llm));
   document.querySelector('#voice-provider-note').textContent = planned ? t('所选后端处于规划阶段，当前可以查看和填写参数；启用语音前仍需切回已接入的后端。') : '';
   document.querySelector('#voice-start').disabled = planned || !voiceInput('enabled').checked;
 }
-for (const key of ['asr_backend','tts_backend','llm_backend','enabled']) voiceInput(key).addEventListener('change', renderVoiceProviders);
+for (const key of ['mode','asr_backend','tts_backend','llm_backend','enabled']) voiceInput(key).addEventListener('change', renderVoiceProviders);
+document.querySelector('#voice-input-refresh').addEventListener('click', async () => {
+  try {
+    const names = await invoke('voice_input_devices');
+    const list = document.querySelector('#voice-input-devices');
+    list.replaceChildren(...names.map(name => { const option = document.createElement('option'); option.value = name; return option; }));
+    voiceMessage.textContent = names.length ? t('已更新麦克风列表；留空使用系统默认设备。') : t('未找到麦克风；接入后再刷新。');
+  } catch (error) { voiceMessage.textContent = String(error); }
+});
 voiceInput('output_volume_percent').addEventListener('input', () => {
   document.querySelector('#voice-output-volume-value').textContent = `${voiceInput('output_volume_percent').value}%`;
 });
@@ -71,14 +81,17 @@ async function saveVoiceSettings() {
     const input = voiceInput(key);
     settings[key] = input.type === 'checkbox' ? input.checked : ['number','range'].includes(input.type) ? Number(input.value) : input.value.trim();
   }
-  try { await invoke('set_voice_settings', {settings}); voiceMessage.textContent = t('语音设置已保存；点击角色头部开始对话。'); }
+  try { await invoke('set_voice_settings', {settings}); voiceMessage.textContent = t(settings.mode === 'transcription' ? '语音设置已保存；点击角色头部开始识别文字。' : '语音设置已保存；点击角色头部开始对话。'); }
   catch (error) { voiceMessage.textContent = String(error); throw error; }
 }
 document.querySelector('#voice-save').addEventListener('click', () => { saveVoiceSettings().catch(() => {}); });
 voiceInput('kws_enabled').addEventListener('change', () => {
   saveVoiceSettings().catch(() => { voiceInput('kws_enabled').checked = !voiceInput('kws_enabled').checked; });
 });
-document.querySelector('#voice-start').addEventListener('click', () => invoke('voice_start').catch(error => voiceMessage.textContent = String(error)));
+document.querySelector('#voice-start').addEventListener('click', async () => {
+  try { await saveVoiceSettings(); await invoke('voice_start'); }
+  catch (error) { voiceMessage.textContent = String(error); }
+});
 document.querySelector('#voice-stop').addEventListener('click', () => invoke('voice_stop').catch(error => voiceMessage.textContent = String(error)));
 const webSettingsStatus = document.querySelector('#web-settings-status');
 let webSaveQueue = Promise.resolve();

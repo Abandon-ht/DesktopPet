@@ -399,6 +399,10 @@ fn status(state: tauri::State<'_, Arc<Shared>>) -> Status {
     status
 }
 #[tauri::command]
+fn voice_input_devices() -> Result<Vec<String>, String> {
+    pet_voice_session::input_devices().map_err(|error| format!("{error:#}"))
+}
+#[tauri::command]
 fn voice_settings(state: tauri::State<'_, Arc<Shared>>) -> Result<VoiceSettings, String> {
     state
         .voice
@@ -416,6 +420,7 @@ fn set_voice_settings(
 ) -> Result<(), String> {
     settings.validate().map_err(|error| error.to_string())?;
     if settings.enabled
+        && settings.mode == pet_voice_session::VoiceMode::Conversation
         && settings.tts_backend == TtsBackend::SherpaOnnx
         && !settings.reference_audio.is_file()
     {
@@ -440,10 +445,13 @@ fn persist_voice_settings(
     shared: &Shared,
     app: &tauri::AppHandle,
 ) -> Result<(), String> {
-    let resources = app
-        .path()
-        .resource_dir()
-        .map_err(|error| error.to_string())?;
+    let resources = match shared.resources.get() {
+        Some(resources) => resources.clone(),
+        None => app
+            .path()
+            .resource_dir()
+            .map_err(|error| error.to_string())?,
+    };
     let stored = resource_paths::for_storage(settings, &resources);
     let serialized = serde_json::to_string(&stored).map_err(|error| error.to_string())?;
     let mut care = shared
@@ -708,11 +716,10 @@ fn maybe_voice_greetings(shared: &Shared) {
             .flatten()
             .as_deref()
             != Some("1")
+        && voice.cue_if_idle(voice::Cue::FirstMeeting)
     {
-        if voice.cue_if_idle(voice::Cue::FirstMeeting) {
-            let _ = care.set_setting("voice_first_greeting_done", "1");
-            return;
-        }
+        let _ = care.set_setting("voice_first_greeting_done", "1");
+        return;
     }
     let level = care
         .load_at(shared.care_clock.now_ms())
@@ -1022,7 +1029,7 @@ fn monitor(
             if let Some(directory) = shared.library.lock().unwrap().as_ref() {
                 command.env("DESKTOPPET_LAYOUT", directory.join("placement.json"));
             }
-            let mut host = Host::start(&mut command, Duration::from_secs(5))?;
+            let mut host = start_render_host(&mut command)?;
             let mut touch_binding = TouchBinding::for_host(&host, selected_model)?;
             // Ordinary requests use a shorter bound after renderer startup.
             host.set_timeout(Duration::from_secs(2))?;
@@ -1110,7 +1117,7 @@ fn monitor(
                             if let Some(directory) = shared.library.lock().unwrap().as_ref() {
                                 command.env("DESKTOPPET_LAYOUT", directory.join("placement.json"));
                             }
-                            let mut candidate = Host::start(&mut command, Duration::from_secs(5))?;
+                            let mut candidate = start_render_host(&mut command)?;
                             candidate.set_timeout(Duration::from_secs(2))?;
                             candidate.desktop(DesktopCommand::SetScale(
                                 shared.scale.load(Ordering::Acquire),
@@ -1229,12 +1236,15 @@ fn monitor(
                         )?;
                     }
                     if signal.action == CareAction::Feed {
-                        let cue =
-                            if shared.feed_voice_sequence.fetch_add(1, Ordering::AcqRel) % 2 == 0 {
-                                voice::Cue::FeedTaste
-                            } else {
-                                voice::Cue::FeedThought
-                            };
+                        let cue = if shared
+                            .feed_voice_sequence
+                            .fetch_add(1, Ordering::AcqRel)
+                            .is_multiple_of(2)
+                        {
+                            voice::Cue::FeedTaste
+                        } else {
+                            voice::Cue::FeedThought
+                        };
                         if let Some(controller) = shared.voice.lock().unwrap().as_ref() {
                             controller.cue_if_idle(cue);
                         }
@@ -1405,6 +1415,28 @@ fn monitor(
         }
     }
 }
+fn start_render_host(command: &mut Command) -> Result<Host> {
+    let Some(directory) = std::env::var_os("DESKTOPPET_LOG_DIR").map(PathBuf::from) else {
+        return Host::start(command, Duration::from_secs(5));
+    };
+    anyhow::ensure!(
+        directory.is_absolute(),
+        "DESKTOPPET_LOG_DIR must be an absolute path"
+    );
+    std::fs::create_dir_all(&directory)?;
+    static ATTEMPT: AtomicU64 = AtomicU64::new(0);
+    let attempt = ATTEMPT.fetch_add(1, Ordering::Relaxed) + 1;
+    let stderr = directory.join(format!("host-{attempt:04}.stderr.log"));
+    let metrics = directory.join(format!("host-{attempt:04}.metrics.json"));
+    let file = std::fs::File::create(&stderr)?;
+    command.env("DESKTOPPET_METRICS", metrics);
+    pet_ipc::event_log!(
+        "{}",
+        serde_json::json!({"event":"host_starting","attempt":attempt,"host_stderr":stderr})
+    );
+    Host::start_with_stderr(command, Duration::from_secs(5), file.into())
+}
+
 fn run() -> Result<()> {
     let layout = install_layout::Layout::current(&std::env::current_exe()?)?;
     let model = layout.model()?;
@@ -1437,7 +1469,7 @@ fn run() -> Result<()> {
         ui_language: Mutex::new(voice::UiLanguage::default()),
         tray_items: Mutex::new(None),
         feed_voice_sequence: AtomicU64::new(0),
-        scale: AtomicU16::new(100),
+        scale: AtomicU16::new(install_layout::initial_scale()?),
         gaze_radius: AtomicU16::new(400),
         perch: AtomicU16::new(50),
         perch_overrides: Mutex::new(BTreeMap::new()),
@@ -1479,6 +1511,7 @@ fn run() -> Result<()> {
             set_companion_settings,
             stop_activity,
             companion_activity,
+            voice_input_devices,
             voice_settings,
             set_voice_settings,
             set_web_settings,
@@ -1523,11 +1556,11 @@ fn run() -> Result<()> {
             let resource_dir = app.path().resource_dir()?;
             let _ = setup_shared.resources.set(resource_dir.clone());
             let dev_data_dir = resource_dir.join("dev-data-dir.txt");
-            let directory = if dev_data_dir.is_file() {
-                PathBuf::from(std::fs::read_to_string(dev_data_dir)?.trim())
-            } else {
-                app.path().app_data_dir()?
-            };
+            let directory = install_layout::data_directory(
+                std::env::var_os("DESKTOPPET_DATA_DIR").map(PathBuf::from),
+                &dev_data_dir,
+                || app.path().app_data_dir().map_err(Into::into),
+            )?;
             std::fs::create_dir_all(&directory)?;
             let care_path = directory.join("care.sqlite3");
             let care = CareStore::open(&care_path, setup_shared.care_clock.now_ms())?;
@@ -1542,7 +1575,11 @@ fn run() -> Result<()> {
             {
                 *setup_shared.ui_language.lock().unwrap() = language;
             }
-            let mut voice_settings = VoiceSettings::default();
+            let mut voice_settings = if install_layout::is_ax650() {
+                VoiceSettings::ax650_defaults()
+            } else {
+                VoiceSettings::default()
+            };
             let bundled_models = resource_dir.join("models");
             if bundled_models.join("silero_vad.onnx").is_file() {
                 voice_settings.model_dir = bundled_models;

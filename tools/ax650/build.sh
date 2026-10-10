@@ -25,9 +25,18 @@ cd "$source_root"
 export CARGO_TARGET_DIR="${1:-${CARGO_TARGET_DIR:-$source_root/target}}"
 mkdir -p "$CARGO_TARGET_DIR"
 export CARGO_TARGET_DIR=$(realpath "$CARGO_TARGET_DIR")
-cargo build --locked --release -p desktop-pet-ax650 -p avatar-host-2d
-python3 tools/ax650/package.py --verify-binaries "$CARGO_TARGET_DIR/release"
-for binary in desktop-pet-ax650 avatar-host-2d; do
+pkg-config --exists gtk+-3.0 webkit2gtk-4.1 alsa ayatana-appindicator3-0.1
+build_packages=(-p desktop-pet -p avatar-host-2d)
+verify_options=()
+binaries=(desktop-pet avatar-host-2d)
+if [ "${AX650_INCLUDE_CLI:-0}" = 1 ]; then
+    build_packages+=(-p desktop-pet-ax650)
+    verify_options+=(--include-cli)
+    binaries+=(desktop-pet-ax650)
+fi
+cargo build --locked --release "${build_packages[@]}"
+python3 tools/ax650/package.py --verify-binaries "$CARGO_TARGET_DIR/release" "${verify_options[@]}"
+for binary in "${binaries[@]}"; do
     readelf --file-header "$CARGO_TARGET_DIR/release/$binary"
     libraries=$(ldd "$CARGO_TARGET_DIR/release/$binary")
     if [[ "$libraries" == *'not found'* ]]; then

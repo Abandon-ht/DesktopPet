@@ -72,6 +72,14 @@ class PackageTests(unittest.TestCase):
         self.binaries.mkdir()
         for name in packaging.BINARIES:
             (self.binaries / name).write_bytes(elf())
+        self.models = self.root / "models"
+        for name in packaging.MODEL_FILES:
+            path = self.models / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"model fixture")
+        espeak = self.models / packaging.TTS_DIRECTORY / "espeak-ng-data"
+        espeak.mkdir()
+        (espeak / "phondata").write_bytes(b"espeak fixture")
 
     def tearDown(self):
         self.temporary.cleanup()
@@ -102,11 +110,19 @@ class PackageTests(unittest.TestCase):
         (self.avatar / "credentials.txt").write_text("private")
         with patch.object(packaging, "source_metadata", return_value={
                 "source_revision": "fixture", "source_branch": "ax650", "source_worktree_dirty": True}):
-            output, archive = packaging.package(self.binaries, self.avatar / "manifest.json", None, self.root / "bundle")
+            output, archive = packaging.package(self.binaries, self.avatar / "manifest.json", None,
+                                                self.root / "bundle", models=self.models)
         self.assertTrue((output / "resources/avatar/model/happy.exp3.json").is_file())
         self.assertFalse((output / "resources/avatar/model/unreferenced.exp3.json").exists())
         self.assertFalse((output / "resources/avatar/credentials.txt").exists())
         self.assertTrue((output / "SHA256SUMS.txt").is_file())
+        self.assertTrue((output / "desktop-pet").is_file())
+        self.assertFalse((output / "desktop-pet-ax650").exists())
+        settings = json.loads((output / "resources/voice-settings.json").read_text())
+        self.assertFalse(settings["enabled"])
+        self.assertEqual(settings["mode"], "transcription")
+        self.assertEqual(settings["asr_threads"], 1)
+        self.assertEqual(settings["model_dir"], "@desktop-pet-resources/models")
         manifest = (output / "package-manifest.json").read_text()
         self.assertNotIn(str(self.root), manifest)
         self.assertIn("source_worktree_dirty", manifest)
@@ -170,11 +186,54 @@ class PackageTests(unittest.TestCase):
             (libraries / "licenses" / notice).write_text("Copyright fixture")
         (libraries / "libGL.so.1").write_bytes(b"do not bundle graphics drivers")
         files = packaging.runtime_files(libraries)
-        self.assertEqual(len(files), 4)
+        self.assertEqual(len(files), 6)
         self.assertFalse(any(target.name == "libGL.so.1" for _, target in files))
         (libraries / "licenses/libxcb-xkb1.copyright").unlink()
         with self.assertRaises(packaging.PackageError):
             packaging.runtime_files(libraries)
+
+    def test_full_voice_models_are_explicit_and_private_files_are_excluded(self):
+        (self.models / "credentials.json").write_text('{"secret": "exclude"}')
+        minimal = packaging.model_files(self.models)
+        full = packaging.model_files(self.models, full_voice_models=True)
+        self.assertEqual(len(minimal), 3)
+        self.assertEqual(len(full), len(packaging.MODEL_FILES) + 1)
+        self.assertFalse(any(path.name == "credentials.json" for path, _ in full))
+        (self.models / "silero_vad.onnx").unlink()
+        with self.assertRaises(packaging.PackageError):
+            packaging.model_files(self.models)
+
+    def test_model_and_espeak_symlink_escape_is_rejected(self):
+        path = self.models / packaging.TTS_DIRECTORY / "espeak-ng-data/phondata"
+        path.unlink()
+        path.symlink_to(self.binaries / packaging.BINARIES[0])
+        with self.assertRaises(packaging.PackageError):
+            packaging.model_files(self.models, full_voice_models=True)
+
+    def test_optional_cli_does_not_replace_full_desktop_entrypoint(self):
+        (self.binaries / packaging.CLI_BINARY).write_bytes(elf())
+        with patch.object(packaging, "source_metadata", return_value={
+                "source_revision": "fixture", "source_branch": "ax650", "source_worktree_dirty": True}):
+            output, _ = packaging.package(self.binaries, self.avatar / "manifest.json", None,
+                                           self.root / "complete", models=self.models,
+                                           include_cli=True, full_voice_models=True)
+        manifest = json.loads((output / "package-manifest.json").read_text())
+        self.assertEqual(manifest["entrypoint"], "desktop-pet")
+        self.assertEqual(set(manifest["binaries"]), set(packaging.BINARIES + (packaging.CLI_BINARY,)))
+        self.assertEqual(manifest["voice_models"], ["vad", "asr", "tts", "kws"])
+
+    def test_voice_reference_and_symlink_safety(self):
+        voice = self.root / "voice"
+        noon = voice / "zh-CN/greetings/noon.wav"
+        noon.parent.mkdir(parents=True)
+        noon.write_bytes(b"RIFF" + bytes(4) + b"WAVE")
+        noon.with_suffix(".txt").write_text("reference fixture")
+        (voice / "credential.json").write_text("private")
+        self.assertEqual(len(packaging.voice_files(voice)), 2)
+        noon.unlink()
+        noon.symlink_to(self.binaries / packaging.BINARIES[0])
+        with self.assertRaises(packaging.PackageError):
+            packaging.voice_files(voice)
 
 
 class DependenciesTests(unittest.TestCase):
@@ -191,6 +250,14 @@ class DependenciesTests(unittest.TestCase):
         result = runtime.check("vulkan", self.loader)
         self.assertIn("libvulkan.so.1", result["loaded"])
         self.assertNotIn("libEGL.so.1", result["loaded"])
+
+    def test_full_app_dependencies_are_separate_from_diagnostic_cli(self):
+        complete = runtime.check("gl", self.loader)
+        diagnostic = runtime.check("gl", self.loader, full_app=False)
+        self.assertIn("libwebkit2gtk-4.1.so.0", complete["loaded"])
+        self.assertIn("libxdo.so.3", complete["loaded"])
+        self.assertNotIn("libwebkit2gtk-4.1.so.0", diagnostic["loaded"])
+        self.assertNotIn("libasound.so.2", diagnostic["loaded"])
 
     def test_missing_dynamic_xkb_library_or_symbol_fails(self):
         def missing_library(name):
@@ -212,6 +279,61 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(env["XAUTHORITY"], "/existing/session.auth")
         self.assertEqual(env["LD_LIBRARY_PATH"], "/private-package/lib:/existing/lib")
         self.assertNotIn("VK_ICD_FILENAMES", env)
+
+    def test_finds_existing_bus_only_on_matching_desktop_and_returns_no_secrets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            proc = Path(directory)
+            for pid, display in ((11, ":1"), (12, ":0.0")):
+                process = proc / str(pid)
+                process.mkdir()
+                (process / "comm").write_text("xfce4-session\n")
+                (process / "environ").write_bytes(
+                    f"DISPLAY={display}\0DBUS_SESSION_BUS_ADDRESS=unix:path=/session-{pid}\0SECRET=must-not-copy\0".encode())
+            result = launcher.desktop_environment(":0", proc)
+            self.assertEqual(result, {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/session-12"})
+            self.assertEqual(launcher.desktop_environment(":0", proc, uid=123456), {})
+
+    def test_full_app_uses_guarded_software_profile_and_env_options(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(launcher, "ROOT", Path(directory)), \
+             patch.dict(launcher.os.environ, {"DISPLAY": ":0", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/existing-bus"}, clear=True), \
+             patch.object(launcher.subprocess, "run") as run, patch.object(launcher.os, "execve") as execute, \
+             patch.object(launcher.os, "chdir"), patch.object(launcher.os, "dup2"):
+            root = Path(directory)
+            model = root / "resources/avatar/manifest.json"
+            model.parent.mkdir(parents=True)
+            model.write_text("{}")
+            run.return_value = subprocess.CompletedProcess([], 0, '{"failures": []}', "")
+            execute.return_value = 0
+            self.assertEqual(launcher.main(["--log-dir", directory, "--scale", "64", "--fps", "20"]), 0)
+            executable, args, env = execute.call_args.args
+            self.assertEqual(Path(executable).name, "desktop-pet")
+            self.assertEqual(args, [executable])
+            self.assertEqual(env["DESKTOPPET_DEVICE_PROFILE"], "ax650")
+            self.assertEqual(env["DESKTOPPET_INITIAL_SCALE"], "64")
+            self.assertEqual(env["DESKTOPPET_MAX_FPS"], "20")
+            self.assertEqual(env["DESKTOPPET_X11_GL_ALPHA"], "1")
+            self.assertEqual(env["WEBKIT_DISABLE_COMPOSITING_MODE"], "1")
+            self.assertNotIn("WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS", env)
+            self.assertNotIn("DESKTOPPET_X11_OPAQUE_ALPHA", env)
+
+    def test_seconds_cannot_silently_limit_complete_desktop(self):
+        with self.assertRaises(SystemExit):
+            launcher.arguments(["--seconds", "30"])
+        self.assertEqual(launcher.arguments(["--cli", "--seconds", "30"]).seconds, 30)
+
+    def test_complete_app_requires_existing_desktop_bus(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(launcher, "ROOT", Path(directory)), \
+             patch.dict(launcher.os.environ, {}, clear=True), patch.object(launcher, "desktop_environment", return_value={}), \
+             patch.object(launcher.subprocess, "run") as run, patch.object(launcher.os, "execve") as execute:
+            model = Path(directory) / "resources/avatar/manifest.json"
+            model.parent.mkdir(parents=True)
+            model.write_text("{}")
+            run.return_value = subprocess.CompletedProcess([], 0, '{"failures": []}', "")
+            self.assertEqual(launcher.main(["--log-dir", directory]), 1)
+            execute.assert_not_called()
+            result = json.loads((Path(directory) / "result.json").read_text())
+            self.assertFalse(result["host_started"])
+            self.assertEqual(result["scope"], "desktop session lookup")
 
     def test_check_only_failure_records_result_without_starting_rust(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(launcher, "ROOT", Path(directory)), \
