@@ -8,7 +8,7 @@
 
 在 Mac 的 OrbStack 中使用同版本原生 ARM64 Ubuntu，Rust 固定为仓库 `rust-toolchain.toml` 的 1.95.0，Cargo 依赖使用 `Cargo.lock`。完整构建环境包括 GTK / WebKitGTK、Ayatana AppIndicator、XDO、ALSA，以及角色宿主的 X11 / GL 依赖。
 
-语音运行库改用已测试的 `zipvoice-axera` 分支，固定 Git revision `5473e19db9c08e63aa41e4c273d9b3f743f1cd25`。来源为 [sherpa-onnx 分支](https://github.com/Abandon-ht/sherpa-onnx/tree/5473e19db9c08e63aa41e4c273d9b3f743f1cd25)，账号仅表示仓库来源，模型仍称 SenseVoice 和 ZipVoice。原生库为 AXERA-enabled shared C API，加上 ONNX Runtime；官方 CPU 静态归档不能替代该构建。
+语音运行库改用已测试的 `zipvoice-axera` 分支，固定 Git revision `5473e19db9c08e63aa41e4c273d9b3f743f1cd25`。来源为 [sherpa-onnx 分支](https://github.com/Abandon-ht/sherpa-onnx/tree/5473e19db9c08e63aa41e4c273d9b3f743f1cd25)。原生库为 AXERA-enabled shared C API，加上 ONNX Runtime；官方 CPU 静态归档不能替代该构建。
 
 复用板端另一会话已编译并测试的原生库，缓存和 SDK 保存在忽略目录：
 

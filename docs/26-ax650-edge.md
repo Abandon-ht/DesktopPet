@@ -106,7 +106,7 @@ NPU 不会默认直接执行现有 ONNX，也不是通用图形 GPU。若采用 
 ## SenseVoice / ZipVoice NPU 接入（2026-10-10）
 
 - sherpa-onnx 固定 `codex/zipvoice-axera` revision `5473e19db9c08e63aa41e4c273d9b3f743f1cd25`。Linux ARM64 使用 AXERA-enabled shared C API 与 ONNX Runtime；其余目标保留 static。版本字符串仍为 1.13.8，原生 artifact 由 SHA-256 固定。Rust overlay 仅补齐该分支 C API 已追加的 offline CTC 字段；12 个 C / Rust 配置结构的大小、对齐、每个字段偏移一致。
-- SenseVoice 默认采用已独立测试的 AX650 10 秒模型及对应 tokens，来源 revision `7cf51476f6236f5dd81f08d9df533483e6845c2f`；ZipVoice 默认采用 distill encoder、四段 decoder 和 version 1 JSON 清单，以及 Vocos axmodel，来源 revision `aa48d14426f528a63ccb0720edb79651597e5316`。保留 HF 来源、前端和许可证；来源账号不是模型名称。
+- SenseVoice 默认采用已独立测试的 AX650 10 秒模型及对应 tokens，来源 revision `7cf51476f6236f5dd81f08d9df533483e6845c2f`；ZipVoice 默认采用 distill encoder、四段 decoder 和 version 1 JSON 清单，以及 Vocos axmodel，来源 revision `aa48d14426f528a63ccb0720edb79651597e5316`。保留 HF 来源、前端和许可证。
 - 两个高级设置里的 GPU 预留项改为“启用 NPU 加速”。勾选后 provider 为 `axera`，默认解析 `models/axera/sensevoice` / `models/axera/zipvoice`；不勾选时沿用原 CPU ONNX 路径。可分别设置 NPU 模型目录，CPU 自定义路径不被覆盖，资源路径可随包移动。默认 ASR 2、TTS 4 线程，旧存档保留用户已保存的值，VAD / KWS 仍为 CPU。
 - NPU ZipVoice distill 使用 4 steps / guidance 3.0；自定义 standard version 2 清单使用 10 steps / guidance 1.0。加载前验证 decoder 清单和四段文件；语音取消沿用已有 generation 与回调检查。
 - 本轮 Ubuntu 22.04 ARM64 release 编译通过；主程序最高 GLIBC 2.34，宿主 2.35，直接依赖解析通过。14 项桌面、15 项语音纯回归与 all-targets 严格 Clippy 通过；3 项既有设备 / 网络测试仍忽略。26 项工具回归通过 Ubuntu Python 3.10。测试覆盖模型切换、CPU 路径恢复、完整清单、缺失 / 越界分段、旧配置迁移和包移动，不打开真实麦克风或 NPU 推理模型。
