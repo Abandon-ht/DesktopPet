@@ -19,6 +19,11 @@ on:
         required: true
         default: resources-2026-09-29
         type: string
+      axera_resource_tag:
+        description: Locked Release containing the tested AX650 axmodels and frontend
+        required: true
+        default: resources-ax650-2026-10-11
+        type: string
 
 permissions:
   contents: read
@@ -165,13 +170,23 @@ jobs:
             --pattern models-kws.zip --pattern SHA256SUMS.json
       - name: Install pinned Tauri bundling CLI
         run: npm install --prefix "$AX650_CI_ROOT/tauri-cli" --no-save --package-lock=false @tauri-apps/cli@2.11.4
+      - name: Download tested AX650 NPU model resources
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AXERA_RESOURCE_TAG: ${{ inputs.axera_resource_tag }}
+        run: |
+          mkdir -p "$AX650_CI_ROOT/axera-release-assets"
+          gh release download "$AXERA_RESOURCE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir "$AX650_CI_ROOT/axera-release-assets" --pattern models-axera.zip --pattern SHA256SUMS.json
       - name: Stage AppImage with verified resources and native runtime
         env:
           RESOURCE_TAG: ${{ inputs.resource_tag }}
+          AXERA_RESOURCE_TAG: ${{ inputs.axera_resource_tag }}
         run: |
           python3 tools/ax650/appimage.py prepare --binaries target/release \
             --output "$AX650_CI_ROOT/appimage-stage" \
             --assets-dir "$AX650_CI_ROOT/release-assets" --resource-tag "$RESOURCE_TAG" \
+            --axera-assets-dir "$AX650_CI_ROOT/axera-release-assets" --axera-resource-tag "$AXERA_RESOURCE_TAG" \
             --native "$AX650_CI_ROOT/native" \
             --native-provenance "$AX650_CI_ROOT/output/build-provenance.json"
       - name: Bundle ARM64 AppImage with GTK / WebKit and avatar helper
@@ -227,6 +242,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           SOURCE_COMMIT: ${{ needs.build.outputs.source_commit }}
           RESOURCE_TAG: ${{ inputs.resource_tag }}
+          AXERA_RESOURCE_TAG: ${{ inputs.axera_resource_tag }}
         run: |
           set -euo pipefail
           (cd release && sha256sum --check --strict SHA256SUMS.txt)
@@ -236,7 +252,7 @@ jobs:
 
           Download **DesktopPet-AX650-aarch64.AppImage**, mark it executable and launch it from the existing XFCE X11 desktop. Software OpenGL and the AX650 device profile are enabled automatically. Character, interaction voices and CPU VAD/ASR/TTS/KWS models from \`${RESOURCE_TAG}\` are included. Settings and saves remain outside the image. Voice starts disabled in transcription mode; select recognition, conversation and speech for LLM / TTS settings. ASR / TTS defaults are 2 / 4 threads.
 
-          Includes the pinned ZipVoice AXERA sherpa runtime. The board supplies matching AXERA SDK libraries through \`/soc/lib\`. NPU axmodel weights remain separate: select the existing tested SenseVoice / ZipVoice NPU directories or shared model root. No AXERA SDK, user reference audio or local user data is redistributed.
+          Includes the pinned ZipVoice AXERA sherpa runtime and the tested NPU resources from \`${AXERA_RESOURCE_TAG}\`: SenseVoice AX650 10-second axmodel with matching tokens, ZipVoice distill encoder and four decoder parts with version-1 manifest, Vocos axmodel, lexicon and espeak frontend. Enable NPU acceleration in ASR / TTS settings to select these bundled models automatically; leave the NPU directories empty. Unchecking restores CPU model selection. The board supplies matching AXERA SDK libraries through \`/soc/lib\`. No AXERA SDK, user reference audio or local user data is redistributed.
 
           Requires glibc 2.35+, Ubuntu 22.04 ARM64 system libraries, X11 compositor and an AppIndicator/StatusNotifier tray host. If FUSE is unavailable, add \`--appimage-extract-and-run\`. CI verifies compilation, pure regressions, architecture, ABI, resources and packaging; real role, tray, microphone, playback and NPU inference remain user validation. Stable 30 fps is not required. No native Wayland acceptance.
 

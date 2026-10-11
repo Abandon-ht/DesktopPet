@@ -8,7 +8,11 @@
 
 流程检查 C / Rust ABI、工具回归、纯应用与语音回归，编译完整桌宠、角色宿主和诊断 CLI，并检查 ARM64、GLIBC ≤ 2.35 和直接动态依赖。保留代码产物 `DesktopPet-AX650-arm64-binaries`，同时生成 `DesktopPet-AX650-AppImage`，二者保留 14 天。勾选 `publish_release`（默认开启）后，把审核通过的 AppImage、SHA-256 和审计记录发布为 `ax650-v0.1.0-alpha.<run-number>` 预发布版。
 
-AppImage 使用与 Linux x86_64 相同的资源 Release（默认 `resources-2026-09-29`），校验并内置角色、互动语音及 CPU VAD / ASR / TTS / KWS。`appimage.py` 复用 Linux 资源审计，改为 ARM64 sidecar 与 ELF 检查，加入 AX650 软件 GL 启动器和 shared sherpa / ONNX Runtime。发布前移除 linuxdeploy 可能带入的 AXERA SDK 库，保留 `/soc/lib` 链接入口，分别记录编译输入和打包后原生库摘要，并重新提取最终 AppImage 复查资源、架构、GLIBC、启动器及隐私规则。NPU axmodel 不在现有资源 Release 内，使用板端已测试的模型根目录或设置中的 SenseVoice / ZipVoice NPU 目录。用户参考声音和存档不进入发布包。
+AppImage 使用公共资源 Release（默认 `resources-2026-09-29`）中的角色、互动语音及 CPU VAD / ASR / TTS / KWS，同时必须下载 AX650 资源 Release `resources-ax650-2026-10-11` 的 `models-axera.zip`。后者内置此前交付板端的 SenseVoice 10 秒 axmodel、ZipVoice distill encoder / 四段 decoder、Vocos，以及匹配词表、version 1 清单、lexicon 和 espeak 数据。勾选 ASR / TTS 的 NPU 开关后自动选择包内目录；取消后选择 CPU 模型。
+
+`model-resources.lock.json` 固定 ZIP 摘要和全部 374 个文件的 SHA-256 / 大小；373 个已有文件在发布前与此前板端交付包逐一比对，新增 ZipVoice 上游许可证，并补充 Vocos / espeak 许可说明。`model-resources.py` 只选择已测试模型与前端，拒绝替换的 Release 摘要、缺失分段、额外文件及用户参考声音。权重留在 Release，不进入 Git。
+
+`appimage.py` 复用 Linux 资源审计，加入 ARM64 sidecar / ELF 检查、AX650 软件 GL 启动器和 shared sherpa / ONNX Runtime。发布前移除 linuxdeploy 带入的 AXERA SDK 库，保留 `/soc/lib` 链接入口，分别记录编译输入和打包后原生库摘要。最终重打包使用启动器支持的 zstd 压缩，再由同一启动器提取最终 AppImage，复查资源、模型、架构、GLIBC、启动器及隐私规则。用户参考声音和存档不进入发布包。
 
 CI 从源码生成的原生库摘要不同于 `fetch-sherpa.sh` 锁定的板端测试库，构建记录明确区分两者；它不是现有私有完整包的替换包，不自动覆盖板端文件。现有板端导入与私有打包仍使用下面的流程，真实 UI、音频和 NPU 推理由用户验收。
 
@@ -18,11 +22,22 @@ GitHub 的手动入口已登记在默认分支 `master`；应用代码和构建�
 
 ```sh
 gh workflow run ax650-build.yml --ref ax650 \
-  -f source_ref=ax650 -f resource_tag=resources-2026-09-29 -f publish_release=true
+  -f source_ref=ax650 -f resource_tag=resources-2026-09-29 \
+  -f axera_resource_tag=resources-ax650-2026-10-11 -f publish_release=true
 gh run list --workflow ax650-build.yml --branch ax650 --limit 1
 ```
 
 仅需要 Actions 产物时使用 `-f publish_release=false`。首次代码编译记录已通过；后续编译和发布都由用户手动调度，不因推送自动启动。
+
+离线重新制作锁定模型 ZIP（需完整已校验的模型根目录；输出为新目录）：
+
+```sh
+python3 tools/ax650/model-resources.py \
+  --models /absolute/tested-axera-models \
+  --output artifacts/local/ax650-model-release
+```
+
+输出 `models-axera.zip` 与 `SHA256SUMS.json`；文件清单和最终 ZIP 都必须与锁文件一致。更新模型版本时应重新核对来源与板端配套前端，再更新锁文件和独立资源 Release；不能只替换远端 ZIP。
 
 ## ARM64 构建
 

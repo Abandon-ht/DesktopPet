@@ -23,6 +23,7 @@ def load(name, path):
 linux = load("linux_appimage", HERE.parent / "linux/appimage.py")
 packaging = load("ax650_package", HERE / "package.py")
 native = load("ax650_native", HERE / "native-runtime.py")
+models = load("ax650_model_resources", HERE / "model-resources.py")
 
 APP_RUN = '''#!/usr/bin/env bash
 set -e
@@ -39,7 +40,7 @@ exec "$APPDIR/AppRun.tauri" "$@"
 '''
 
 
-def prepare(binaries, output, assets, resource_tag, native_root, provenance, loader):
+def prepare(binaries, output, assets, resource_tag, native_root, provenance, loader, axera_assets, axera_resource_tag):
     receipt = json.loads(provenance.read_text())
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=linux.ROOT, text=True).strip()
     if receipt.get("sherpa_revision") != native.REVISION or receipt.get("provider") != "axera" or receipt.get("source_commit") != commit:
@@ -65,7 +66,10 @@ def prepare(binaries, output, assets, resource_tag, native_root, provenance, loa
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
     metadata_path = resources / "release.json"
     metadata = json.loads(metadata_path.read_text())
-    metadata.update(device_profile="ax650", rendering="software OpenGL", bundled_axera_models=False,
+    inventory, model_receipt = models.unpack(axera_assets, resources, axera_resource_tag)
+    metadata["resource_files"].update(inventory)
+    metadata.update(device_profile="ax650", rendering="software OpenGL", bundled_axera_models=True,
+                    axera_models=model_receipt,
                     native_runtime=dict(sherpa_revision=native.REVISION, sdk_revision=receipt["sdk_revision"],
                                         origin=receipt["native_origin"], sdk_bundled=False,
                                         files={f"usr/lib/{name}": linux.digest(path) for name, path in libraries.items()}),
@@ -74,6 +78,7 @@ def prepare(binaries, output, assets, resource_tag, native_root, provenance, loa
     config_path = output / "tauri-appimage.conf.json"
     config = json.loads(config_path.read_text())
     files = config["bundle"]["linux"]["appimage"]["files"]
+    files.update({f"/usr/bin/resources/{name}": str(resources / name) for name in inventory})
     files.update({f"/usr/lib/{name}": str(path) for name, path in libraries.items()})
     files.update({f"/usr/share/doc/desktoppet/{name}": str(native_root / "licenses" / name) for name in native.LICENSES})
     (output / "notices/README.txt").write_text('''DesktopPet AX650 ARM64 AppImage / Ubuntu 22.04 / XFCE X11
@@ -85,9 +90,10 @@ in transcription mode (ASR 2 threads, TTS 4 threads). For LLM/TTS configuration,
 switch the voice mode to recognition, conversation and speech.
 
 AXERA sherpa is included; the board supplies its matching SDK in /soc/lib.
-NPU axmodel weights are supplied separately: use the existing tested model root
-or select the SenseVoice / ZipVoice NPU directories in settings. The selected
-resource Release contains CPU models, not converted NPU weights.
+The tested AX650 SenseVoice (10 seconds), ZipVoice distill (encoder and four
+decoder parts) and Vocos axmodels are included with matched tokens, manifest,
+lexicon and espeak data. Enable NPU acceleration in ASR / TTS settings to select
+the bundled models automatically. CPU models remain available when unchecked.
 
 Make the image executable and launch it from the existing XFCE session.
 Use --appimage-extract-and-run if FUSE is unavailable. Per-user settings and saves
@@ -147,7 +153,8 @@ def audit(appdir, metadata):
         raise ValueError("AX650 launcher mismatch")
     if not (appdir / "AppRun.tauri").is_file():
         raise ValueError("Tauri launcher missing")
-    return dict(native_elf=checks, sdk_bundled=False, rendering="software OpenGL",
+    model_checks = models.audit(appdir / "usr/bin/resources", metadata)
+    return dict(native_elf=checks, axera_models=model_checks, sdk_bundled=False, rendering="software OpenGL",
                 scope="packaging and provenance only; no desktop, microphone or NPU inference")
 
 
@@ -171,7 +178,9 @@ def finish(image, output, expected_commit, report):
         metadata = linux.audit(appdir, expected_commit, "aarch64")
         audit(appdir, metadata)
         squashfs = work / "appdir.squashfs"
-        subprocess.run(["mksquashfs", str(appdir), str(squashfs), "-noappend", "-all-root", "-comp", "xz", "-no-xattrs"], check=True)
+        # Tauri's type-2 runtime supports zlib/zstd, not xz. Always re-extract the
+        # finished image with that same runtime before publishing it.
+        subprocess.run(["mksquashfs", str(appdir), str(squashfs), "-noappend", "-all-root", "-comp", "zstd", "-no-xattrs"], check=True)
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open("wb") as destination, squashfs.open("rb") as source:
             destination.write(prefix)
@@ -185,9 +194,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     stage = sub.add_parser("prepare")
-    for name in ("binaries", "output", "assets-dir", "native", "native-provenance"):
+    for name in ("binaries", "output", "assets-dir", "native", "native-provenance", "axera-assets-dir"):
         stage.add_argument("--" + name, required=True, type=Path)
     stage.add_argument("--resource-tag", required=True)
+    stage.add_argument("--axera-resource-tag", required=True)
     stage.add_argument("--vulkan-loader", type=Path, default=Path("/usr/lib/aarch64-linux-gnu/libvulkan.so.1"))
     final = sub.add_parser("finish")
     for name in ("image", "output", "report"):
@@ -196,7 +206,8 @@ def main():
     args = parser.parse_args()
     if args.command == "prepare":
         prepare(args.binaries.resolve(), args.output.resolve(), args.assets_dir.resolve(), args.resource_tag,
-                args.native.resolve(), args.native_provenance.resolve(), args.vulkan_loader)
+                args.native.resolve(), args.native_provenance.resolve(), args.vulkan_loader,
+                args.axera_assets_dir.resolve(), args.axera_resource_tag)
     else:
         finish(args.image, args.output, args.expected_commit, args.report)
 

@@ -112,3 +112,13 @@ NPU 不会默认直接执行现有 ONNX，也不是通用图形 GPU。若采用 
 - 本轮 Ubuntu 22.04 ARM64 release 编译通过；主程序最高 GLIBC 2.34，宿主 2.35，直接依赖解析通过。14 项桌面、15 项语音纯回归与 all-targets 严格 Clippy 通过；3 项既有设备 / 网络测试仍忽略。26 项工具回归通过 Ubuntu Python 3.10。测试覆盖模型切换、CPU 路径恢复、完整清单、缺失 / 越界分段、旧配置迁移和包移动，不打开真实麦克风或 NPU 推理模型。
 
 另一会话的独立 C++ / C API 模型测试只是当前模型选择依据。本轮桌宠的真实 NPU 识别、克隆朗读、取消延迟、长发言及渲染并发仍由用户在 HDMI / XFCE 与接入的麦克风验收。当前实现不增加 VNC / Remote Desktop，不要求稳定 30 fps。来源、原生 artifact、ABI 和用户步骤见 [构建文档](../BUILDING.ax650.zh-CN.md)。
+
+## AppImage 内置 NPU 资源与离线构建（2026-10-11）
+
+首次手动 AppImage 构建在最终提取时报错：重打包使用 xz，而 Tauri 的 AppImage runtime 只支持 zlib / zstd。此前编译、纯回归、资源下载和 Tauri 初次打包已经通过；修正最终 SquashFS 为 zstd，并保留使用相同 runtime 提取最终产物的审核步骤。
+
+此前套用公共 CPU 资源 Release 导致 NPU 模型未进入 AppImage，打包范围不完整。补充独立资源 Release `resources-ax650-2026-10-11`：`models-axera.zip` 包含已经交付板端的 SenseVoice AX650 10 秒 axmodel、ZipVoice distill encoder / 四段 decoder、Vocos，以及匹配 tokens、version 1 清单、lexicon 和 espeak 数据。勾选 NPU 后默认使用包内目录。原公共资源 Release 与其他平台构建继续使用现有内容。
+
+373 个本地已有模型 / 前端文件与此前板端完整交付包逐一比对；本次仅增加上游许可证及补充 NOTICE，不更换模型与前端字节。原 HF 文件按固定 revision 校验，最终 ZIP、全部 374 个文件和来源记录锁定于 `tools/ax650/model-resources.lock.json`。CI 必须验证并内置该集合；资源缺失、被替换或多出参考声音时失败。权重上传资源 Release，Git 仅保存工具、来源和摘要。
+
+板卡离线时仍可完成模型归档、纯回归、ARM64 编译、AppImage 重新提取审核和 GitHub 发布；不尝试连接或更改板端。当前构建流程仍仅手动触发，真实角色、托盘、麦克风、TTS 播放和应用内 NPU 推理由用户上线后验收，不要求稳定 30 fps。

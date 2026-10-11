@@ -52,12 +52,42 @@ class Ax650AppImageTests(unittest.TestCase):
             path = self.assets / name
             checks[name] = dict(sha256=appimage.linux.digest(path), bytes=path.stat().st_size)
         (self.assets / "SHA256SUMS.json").write_text(json.dumps(checks))
+        self.axera_assets = self.root / "axera-assets"
+        self.axera_assets.mkdir()
+        model_root = self.root / "models"
+        names = ["sensevoice/sensevoice.axmodel", "sensevoice/tokens.txt",
+                 "zipvoice/encoder.axmodel", "zipvoice/vocos_full.axmodel",
+                 "zipvoice/tokens.txt", "zipvoice/lexicon.txt", "zipvoice/espeak-ng-data/phondata",
+                 *(f"zipvoice/decoder_part{index}.axmodel" for index in range(4))]
+        for name in names:
+            path = model_root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"matched model or frontend fixture")
+        manifest = dict(version=1, encoder=dict(file="encoder.axmodel"),
+                        decoder_parts=[dict(file=f"decoder_part{i}.axmodel") for i in range(4)])
+        (model_root / "zipvoice/decoder4_split_manifest.json").write_text(json.dumps(manifest))
+        model_files = appimage.models.selected_files(model_root)
+        self.model_lock = dict(schema_version=1, resource_tag="fixture-ax650", sources=dict(origin="fixture"),
+                               files={name: dict(sha256=appimage.models.digest(path), bytes=path.stat().st_size)
+                                      for name, path in model_files.items()})
+        self.model_lock["archive"] = appimage.models.write_archive(model_files, self.axera_assets / "models-axera.zip")
+        self.lock_path = self.root / "model-lock.json"
+        self.lock_path.write_text(json.dumps(self.model_lock))
+        lock_patch = patch.object(appimage.models, "LOCK", self.lock_path)
+        lock_patch.start()
+        self.addCleanup(lock_patch.stop)
+        self.write_model_checks()
         self.stage = self.root / "stage"
+
+    def write_model_checks(self):
+        archive = self.model_lock["archive"]
+        (self.axera_assets / "SHA256SUMS.json").write_text(json.dumps(
+            {archive["name"]: {key: archive[key] for key in ("sha256", "bytes")}}))
 
     def prepare(self):
         with contextlib.redirect_stdout(io.StringIO()):
             appimage.prepare(self.binaries, self.stage, self.assets, "fixture-resources",
-                             self.native, self.provenance, self.loader)
+                             self.native, self.provenance, self.loader, self.axera_assets, "fixture-ax650")
 
     def finalized(self):
         self.prepare()
@@ -95,6 +125,41 @@ class Ax650AppImageTests(unittest.TestCase):
                             runtime["files"]["usr/lib/libsherpa-onnx-c-api.so"])
         self.assertEqual(runtime["files"]["usr/lib/libonnxruntime.so"],
                          runtime["files"]["usr/lib/libonnxruntime.so.1.28.2"])
+
+    def test_image_contains_locked_axmodels_and_complete_frontend(self):
+        tree = self.finalized()
+        metadata = appimage.linux.audit(tree, self.commit, "aarch64")
+        result = appimage.audit(tree, metadata)
+        self.assertTrue(metadata["bundled_axera_models"])
+        self.assertEqual(len(list(tree.rglob("*.axmodel"))), 7)
+        self.assertEqual(result["axera_models"]["file_count"], len(self.model_lock["files"]))
+        (tree / "usr/bin/resources/models/axera/zipvoice/decoder_part3.axmodel").unlink()
+        with self.assertRaises((ValueError, appimage.packaging.PackageError)):
+            appimage.audit(tree, metadata)
+
+    def test_remote_checksum_cannot_replace_locked_model_archive(self):
+        archive = self.axera_assets / "models-axera.zip"
+        with archive.open("ab") as stream:
+            stream.write(b"changed Release bytes")
+        checks = {archive.name: dict(sha256=appimage.models.digest(archive), bytes=archive.stat().st_size)}
+        (self.axera_assets / "SHA256SUMS.json").write_text(json.dumps(checks))
+        with self.assertRaises(ValueError):
+            self.prepare()
+
+    def test_model_archive_rejects_missing_part_or_unapproved_reference_audio(self):
+        archive = self.axera_assets / "models-axera.zip"
+        with zipfile.ZipFile(archive) as source:
+            entries = {entry.filename: source.read(entry) for entry in source.infolist()}
+        del entries["models/axera/zipvoice/decoder_part3.axmodel"]
+        entries["models/axera/zipvoice/private-reference.wav"] = b"private voice"
+        with zipfile.ZipFile(archive, "w") as destination:
+            for name, content in entries.items():
+                destination.writestr(name, content)
+        self.model_lock["archive"].update(sha256=appimage.models.digest(archive), bytes=archive.stat().st_size)
+        self.lock_path.write_text(json.dumps(self.model_lock))
+        self.write_model_checks()
+        with self.assertRaises(ValueError):
+            self.prepare()
 
     def test_tampered_native_library_or_launcher_is_rejected(self):
         tree = self.finalized()
