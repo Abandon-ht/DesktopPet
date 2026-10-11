@@ -8,7 +8,7 @@
 
 流程检查 C / Rust ABI、工具回归、纯应用与语音回归，编译完整桌宠、角色宿主和诊断 CLI，并检查 ARM64、GLIBC ≤ 2.35 和直接动态依赖。保留代码产物 `DesktopPet-AX650-arm64-binaries`，同时生成 `DesktopPet-AX650-AppImage`，二者保留 14 天。勾选 `publish_release`（默认开启）后，把审核通过的 AppImage、SHA-256 和审计记录发布为 `ax650-v0.1.0-alpha.<run-number>` 预发布版。
 
-已发布并审核通过的完整包：[AX650 alpha 4](https://github.com/Abandon-ht/DesktopPet/releases/tag/ax650-v0.1.0-alpha.4)，源码 `d58436ec8fd17c29fb47a9641515b7925baef111`。对应[手动构建](https://github.com/Abandon-ht/DesktopPet/actions/runs/38110231975)成功；包含 CPU 与 NPU 模型，最终提取确认 7 个 axmodel / 374 个 NPU 配套文件。使用方法见 [板端启动说明](../../BUILDING.ax650.zh-CN.md)。
+已发布并审核通过的完整包：[AX650 alpha 5](https://github.com/Abandon-ht/DesktopPet/releases/tag/ax650-v0.1.0-alpha.5)，源码 `4dba16823d12330ceb0ace95ddd653a15db7d911`。对应[手动构建](https://github.com/Abandon-ht/DesktopPet/actions/runs/38127033034)成功；新增 LLM 正文增量驱动的分句合成与持续播放，修复 alpha.4 缺少动态 X11 库导致的角色启动失败。包含 CPU 与 NPU 模型，最终提取确认 7 个 axmodel / 374 个 NPU 配套文件及 XKB 动态加载通过。用户已反馈对应本地 AX650 测试包功能正常。使用方法见 [板端启动说明](../../BUILDING.ax650.zh-CN.md)。
 
 AppImage 使用公共资源 Release（默认 `resources-2026-09-29`）中的角色、互动语音及 CPU VAD / ASR / TTS / KWS，同时必须下载 AX650 资源 Release `resources-ax650-2026-10-11` 的 `models-axera.zip`。后者内置此前交付板端的 SenseVoice 10 秒 axmodel、ZipVoice distill encoder / 四段 decoder、Vocos，以及匹配词表、version 1 清单、lexicon 和 espeak 数据。勾选 ASR / TTS 的 NPU 开关后自动选择包内目录；取消后选择 CPU 模型。
 

@@ -156,3 +156,9 @@ Ubuntu 22.04 ARM64 Docker 中 69 项 Rust 回归通过，7 项既有网络/实�
 板端用户入口为 `/root/Desktop/run-streaming.sh`，日志写入 `/root/Desktop/streaming-tts-error.log`；原启动脚本保留，检查只向本次独立进程组发送退出信号。测试前应从托盘退出旧版。当前源码同时生成 macOS arm64 `.app`，主程序/嵌套角色宿主 bundle 与 ad-hoc 签名验证通过，位于忽略目录 `artifacts/local/ax650-streaming-tts-20261011/`。此次未发布新 Release。
 
 用户随后完成上述本地测试包的板端验收，反馈“功能一切正常”，并授权提交、推送及触发 Actions 发布新包。AX650 手动工作流同时纳入 HTTP / Agent 的正文流回归，发布说明记录连续语音流水线与动态 X11 库修复。此反馈对应本地测试包；新 CI 包继续独立执行编译、ABI、资源及最终提取审核。
+
+## alpha.5 发布结果（2026-10-11）
+
+功能与修复提交 `4dba16823d12330ceb0ace95ddd653a15db7d911` 已推送至 `ax650`，通过该提交的固定 SHA 手动触发[构建 38127033034](https://github.com/Abandon-ht/DesktopPet/actions/runs/38127033034)。构建与发布任务全部成功，生成[AX650 alpha 5](https://github.com/Abandon-ht/DesktopPet/releases/tag/ax650-v0.1.0-alpha.5)，tag 精确指向上述功能提交。CI 中 69 项 Rust 回归、55 项工具回归通过，7 项既有网络/实机测试忽略；三个 ARM64 程序编译、C / Rust ABI、最终 AppImage 提取与 XKB 动态加载检查均通过，NPU 配套文件仍为 374 项，SDK 排除通过，主程序/宿主最高 GLIBC 为 2.34/2.35。
+
+发布资产为 `DesktopPet-AX650-aarch64.AppImage`、`SHA256SUMS.txt` 和 `appimage-audit.json`。AppImage 为 799,746,568 字节，SHA-256 `e77b6053024e73a1a5b0d80a247e63ece9fdcd63b894e1f4bddfe7f75790d2c0`；GitHub 服务器返回的资产摘要、下载的校验清单和最终审计记录一致，清单/审计文件自身摘要也与服务器一致。此为 CI 构建发布包；用户功能验收对应此前同一功能源码的本地测试包，发布后未重新进行板端音频测试。
