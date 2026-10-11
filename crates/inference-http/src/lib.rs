@@ -333,6 +333,95 @@ impl LmStudioBackend {
         Ok(ToolChatReply { text, calls })
     }
 
+    /// Stream a definitive answer after tool execution. Tool planning remains
+    /// a separate complete round; only this round's body may reach speech.
+    pub async fn stream_final_tool_chat(
+        &self,
+        messages: &[serde_json::Value],
+        tools: &[serde_json::Value],
+        mut on_text: impl FnMut(&str),
+    ) -> Result<String> {
+        ensure_tool_messages(messages)?;
+        let response = self
+            .client
+            .post(self.base_url.join("chat/completions")?)
+            .header("Accept", "text/event-stream")
+            .json(&serde_json::json!({
+                "model": self.config.model_id,
+                "messages": messages,
+                "tools": tools,
+                "tool_choice": "none",
+                "max_tokens": self.config.max_output_tokens.max(768),
+                "stream": true
+            }))
+            .send()
+            .await
+            .context("联网最终回复请求失败")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!(
+                "联网最终回复 HTTP {status}: {}",
+                body.chars().take(300).collect::<String>()
+            );
+        }
+        let mut bytes = response.bytes_stream();
+        let mut decoder = SseDecoder::default();
+        let mut answer = String::new();
+        let mut done = false;
+        while let Some(chunk) = bytes.next().await {
+            for data in decoder.push(&chunk.context("联网最终回复流中断")?)? {
+                if data == "[DONE]" {
+                    done = true;
+                    break;
+                }
+                let value: serde_json::Value =
+                    serde_json::from_str(&data).context("联网最终回复流事件无效")?;
+                if let Some(error) = value.get("error") {
+                    bail!("联网最终回复流错误: {error}");
+                }
+                let Some(choice) = value.get("choices").and_then(|choices| choices.get(0)) else {
+                    continue;
+                };
+                match choice
+                    .get("finish_reason")
+                    .and_then(|reason| reason.as_str())
+                {
+                    Some("length") => bail!("工具对话达到输出 token 上限"),
+                    Some("tool_calls") => bail!("模型在最终回复中仍请求工具"),
+                    _ => {}
+                }
+                if let Some(delta) = choice.get("delta") {
+                    if delta
+                        .get("tool_calls")
+                        .and_then(|calls| calls.as_array())
+                        .is_some_and(|calls| !calls.is_empty())
+                    {
+                        bail!("模型在最终回复中仍请求工具");
+                    }
+                    // Reasoning, function arguments and other fields are never
+                    // forwarded, even when providers include them with content.
+                    if let Some(text) = delta.get("content").and_then(|content| content.as_str())
+                        && !text.is_empty()
+                    {
+                        answer.push_str(text);
+                        on_text(text);
+                    }
+                }
+            }
+            if done {
+                break;
+            }
+        }
+        if !done {
+            bail!("联网最终回复流缺少 [DONE]");
+        }
+        if answer.trim().is_empty() {
+            bail!("模型没有返回查询答案");
+        }
+        Ok(answer)
+    }
+
     /// LM Studio's native API permits per-request reasoning control. For the
     /// configured Qwen model this is needed to obtain a timely spoken answer.
     /// Stateless convenience method for probes and single-turn clients.
@@ -517,6 +606,40 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
 
+    fn read_request(stream: &mut std::net::TcpStream) -> serde_json::Value {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = Vec::new();
+        let header_end = loop {
+            let mut buffer = [0; 4096];
+            let size = stream.read(&mut buffer).unwrap();
+            assert!(size > 0);
+            request.extend_from_slice(&buffer[..size]);
+            if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                break end + 4;
+            }
+        };
+        let header = String::from_utf8_lossy(&request[..header_end]);
+        assert!(header.starts_with("POST /v1/chat/completions"));
+        let length = header
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length: ")?
+                    .parse::<usize>()
+                    .ok()
+            })
+            .unwrap();
+        while request.len() < header_end + length {
+            let mut buffer = [0; 4096];
+            let size = stream.read(&mut buffer).unwrap();
+            assert!(size > 0);
+            request.extend_from_slice(&buffer[..size]);
+        }
+        serde_json::from_slice(&request[header_end..header_end + length]).unwrap()
+    }
+
     #[test]
     fn accepts_root_and_v1_urls() {
         for base in ["http://127.0.0.1:1234", "http://127.0.0.1:1234/v1/"] {
@@ -563,6 +686,81 @@ mod tests {
         assert_eq!(reply.calls.len(), 1);
         assert_eq!(reply.calls[0].name, "web_search");
         assert_eq!(reply.calls[0].arguments, r#"{"query":"Rust"}"#);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn final_tool_answer_streams_body_before_done_and_preserves_tool_evidence() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (heard_tx, heard_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_request(&mut stream);
+            assert_eq!(request["stream"], true);
+            assert_eq!(request["tool_choice"], "none");
+            assert_eq!(request["messages"][2]["role"], "tool");
+            assert_eq!(request["messages"][2]["content"], "网页正文证据");
+            let first = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"内部推理\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"正文。\"}}]}\n\n";
+            let last = "data: {\"choices\":[{\"delta\":{\"content\":\"尾巴。[S1]\"}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", first.len() + last.len(), first).unwrap();
+            stream.flush().unwrap();
+            // The client must expose a body delta while HTTP is still open.
+            heard_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            stream.write_all(last.as_bytes()).unwrap();
+        });
+        let backend = LmStudioBackend::new(LmStudioConfig::new(
+            format!("http://127.0.0.1:{port}"),
+            "mock",
+        ))
+        .unwrap();
+        let messages = [
+            serde_json::json!({"role":"user","content":"问题"}),
+            serde_json::json!({"role":"assistant","tool_calls":[{"id":"page","type":"function","function":{"name":"fetch_page","arguments":"{}"}}]}),
+            serde_json::json!({"role":"tool","tool_call_id":"page","content":"网页正文证据"}),
+        ];
+        let mut deltas = Vec::new();
+        let answer = backend
+            .stream_final_tool_chat(&messages, &[], |delta| {
+                deltas.push(delta.to_owned());
+                if delta == "正文。" {
+                    heard_tx.send(()).unwrap();
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(deltas, ["正文。", "尾巴。[S1]"]);
+        assert_eq!(answer, "正文。尾巴。[S1]");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn final_tool_answer_rejects_new_calls_before_forwarding_planning_text() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_request(&mut stream);
+            assert_eq!(request["tool_choice"], "none");
+            let body = "data: {\"choices\":[{\"delta\":{\"content\":\"工具规划不可朗读\",\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"fetch_page\",\"arguments\":\"{}\"}}]}}]}\n\ndata: [DONE]\n\n";
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        });
+        let backend = LmStudioBackend::new(LmStudioConfig::new(
+            format!("http://127.0.0.1:{port}"),
+            "mock",
+        ))
+        .unwrap();
+        let mut deltas = Vec::new();
+        let error = backend
+            .stream_final_tool_chat(
+                &[serde_json::json!({"role":"user","content":"问题"})],
+                &[],
+                |delta| deltas.push(delta.to_owned()),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("最终回复中仍请求工具"));
+        assert!(deltas.is_empty());
         server.join().unwrap();
     }
 }

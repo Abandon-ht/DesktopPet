@@ -2,6 +2,7 @@
 //! Providers may be local sherpa-onnx, another native runtime, or cloud APIs.
 
 mod local;
+mod streaming;
 pub use local::{
     input_devices, listen_for_keyword, local_configured_pipeline_with_memory, local_pipeline,
     local_pipeline_with_memory, play_wav, play_wav_with_volume,
@@ -16,7 +17,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
 
@@ -355,6 +356,7 @@ pub struct TurnToken {
     generation: Arc<AtomicU64>,
     generation_id: u64,
     turn_id: u64,
+    abort: Option<Arc<AtomicBool>>,
 }
 
 impl TurnToken {
@@ -363,6 +365,7 @@ impl TurnToken {
             generation,
             generation_id: turn_id,
             turn_id,
+            abort: None,
         }
     }
     pub fn for_turn(generation: Arc<AtomicU64>, generation_id: u64, turn_id: u64) -> Self {
@@ -370,6 +373,7 @@ impl TurnToken {
             generation,
             generation_id,
             turn_id,
+            abort: None,
         }
     }
     pub fn session_id(&self) -> u64 {
@@ -380,12 +384,31 @@ impl TurnToken {
     }
     pub fn is_current(&self) -> bool {
         self.generation.load(Ordering::Acquire) == self.generation_id
+            && !self
+                .abort
+                .as_ref()
+                .is_some_and(|abort| abort.load(Ordering::Acquire))
     }
     pub fn check(&self) -> Result<()> {
         if self.is_current() {
             Ok(())
         } else {
             bail!("voice turn cancelled")
+        }
+    }
+
+    /// A stage failure stops this turn's workers without invalidating the UI's
+    /// session generation or changing the caller's token.
+    fn linked(&self) -> Self {
+        Self {
+            abort: Some(Arc::new(AtomicBool::new(false))),
+            ..self.clone()
+        }
+    }
+
+    fn abort(&self) {
+        if let Some(abort) = &self.abort {
+            abort.store(true, Ordering::Release);
         }
     }
 }
@@ -421,8 +444,36 @@ pub trait TtsPort: Send {
         on_audio: &mut dyn FnMut(Pcm) -> Result<()>,
     ) -> Result<()>;
 }
+/// A nonblocking producer poll lets the output worker monitor its device even
+/// while synthesis or the network has not supplied the next audio frame.
+#[derive(Debug)]
+pub enum PlaybackItem {
+    Audio(Pcm),
+    Pending,
+    End,
+}
+
 pub trait PlaybackPort: Send {
     fn play(&mut self, pcm: &Pcm, token: &TurnToken) -> Result<()>;
+
+    /// Consume ordered PCM until the producer finishes. Device adapters can
+    /// override this to keep one output stream open for the entire reply.
+    fn play_stream(
+        &mut self,
+        next: &mut dyn FnMut() -> Result<PlaybackItem>,
+        token: &TurnToken,
+    ) -> Result<()> {
+        loop {
+            token.check()?;
+            match next()? {
+                PlaybackItem::Audio(pcm) => self.play(&pcm, token)?,
+                PlaybackItem::Pending => {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                PlaybackItem::End => return token.check(),
+            }
+        }
+    }
 }
 
 pub struct VoicePipeline {
@@ -523,50 +574,19 @@ impl VoicePipeline {
         }
         .into();
         report(status.clone());
-        let response = self.llm.reply(&transcript, token, &mut |delta| {
-            if token.is_current() {
-                status.response.push_str(delta);
-                report(status.clone());
-            }
-        })?;
-        token.check()?;
-        if response.trim().is_empty() {
-            bail!("LLM 未返回可朗读正文");
-        }
-        status.response = response.clone();
-        status.sources = self.llm.take_sources();
-        let speech = if status.sources.is_empty() {
-            response.clone()
-        } else {
-            strip_source_tags(&response)
-        };
-        for sentence in spoken_segments(&speech, 80) {
-            token.check()?;
-            status.phase = "synthesizing".into();
-            report(status.clone());
-            let playback = &mut self.playback;
-            let mut chunks = 0usize;
-            self.tts.synthesize(&sentence, token, &mut |speech| {
-                token.check()?;
-                if speech.samples.is_empty() || speech.sample_rate == 0 {
-                    bail!("TTS 输出了无效音频块");
-                }
-                chunks += 1;
-                status.phase = "speaking".into();
-                report(status.clone());
-                playback.play(&speech, token)
-            })?;
-            if chunks == 0 {
-                bail!("TTS 未输出音频");
-            }
-        }
-        token.check()?;
-        status.phase = "idle".into();
-        report(status);
-        Ok(())
+        streaming::run(
+            self.llm.as_mut(),
+            self.tts.as_mut(),
+            self.playback.as_mut(),
+            &transcript,
+            token,
+            status,
+            &mut report,
+        )
     }
 }
 
+#[cfg(test)]
 fn strip_source_tags(text: &str) -> String {
     let mut result = String::new();
     let mut rest = text;
@@ -587,22 +607,11 @@ fn strip_source_tags(text: &str) -> String {
     result.trim().to_string()
 }
 
+#[cfg(test)]
 fn spoken_segments(text: &str, limit: usize) -> Vec<String> {
-    let mut result = Vec::new();
-    let mut current = String::new();
-    for ch in text.chars() {
-        current.push(ch);
-        if "。！？；.!?\n".contains(ch) || current.chars().count() >= limit {
-            let segment = current.trim();
-            if !segment.is_empty() {
-                result.push(segment.to_owned());
-            }
-            current.clear();
-        }
-    }
-    if !current.trim().is_empty() {
-        result.push(current.trim().to_owned());
-    }
+    let mut segmenter = streaming::SpeechSegmenter::new(limit, limit);
+    let mut result = segmenter.push(text);
+    result.extend(segmenter.finish());
     result
 }
 

@@ -12,9 +12,13 @@
 
 AppImage 使用公共资源 Release（默认 `resources-2026-09-29`）中的角色、互动语音及 CPU VAD / ASR / TTS / KWS，同时必须下载 AX650 资源 Release `resources-ax650-2026-10-11` 的 `models-axera.zip`。后者内置此前交付板端的 SenseVoice 10 秒 axmodel、ZipVoice distill encoder / 四段 decoder、Vocos，以及匹配词表、version 1 清单、lexicon 和 espeak 数据。勾选 ASR / TTS 的 NPU 开关后自动选择包内目录；取消后选择 CPU 模型。
 
+本地编译与打包优先使用 macOS 的 Ubuntu 22.04 ARM64 Docker 环境；板卡用于传包、运行依赖预检与短时桌面 / 音频验收，不在端侧编译或压缩发行包。
+
 `model-resources.lock.json` 固定 ZIP 摘要和全部 374 个文件的 SHA-256 / 大小；373 个已有文件在发布前与此前板端交付包逐一比对，新增 ZipVoice 上游许可证，并补充 Vocos / espeak 许可说明。`model-resources.py` 只选择已测试模型与前端，拒绝替换的 Release 摘要、缺失分段、额外文件及用户参考声音。权重留在 Release，不进入 Git。
 
 `appimage.py` 复用 Linux 资源审计，加入 ARM64 sidecar / ELF 检查、AX650 软件 GL 启动器和 shared sherpa / ONNX Runtime。已审核的资源目录使用单条 Tauri 目录映射；逐文件清单放在包内 `release.json`，避免 Tauri 向 Cargo 传递 `TAURI_CONFIG` 时超过 Linux 单个环境变量 128 KiB 限制。发布前移除 linuxdeploy 带入的 AXERA SDK 库，保留 `/soc/lib` 链接入口，分别记录编译输入和打包后原生库摘要。最终重打包使用启动器支持的 zstd 压缩，再由同一启动器提取最终 AppImage，复查资源、模型、架构、GLIBC、启动器及隐私规则。用户参考声音和存档不进入发布包。
+
+alpha.4 的板端日志暴露了 `ldd` / linuxdeploy 无法发现的动态依赖遗漏：角色宿主因缺少 `libxkbcommon-x11.so.0` 崩溃。AppImage 现显式携带 `libxkbcommon-x11.so.0`、`libxcb-xkb.so.1`、`libxdo.so.3` 和三个 Ubuntu copyright 文件，复用私有包的依赖契约。默认读取 CI 的 Ubuntu ARM64 系统包；`prepare --runtime-libs /absolute/lib-directory` 可选择已验证库及其 `licenses/`。缺库、缺许可证、错误架构或 GLIBC 超过 2.35 时拒绝打包。`release.json` 单独记录 X11 库输入与 linuxdeploy 处理后摘要；最终提取审核要求文件及许可证齐全，并在新的 Python 进程中加载包内三个库、检查四个 XKB 入口，清除继承的 CI 库搜索路径与 `LD_PRELOAD`。
 
 CI 从源码生成的原生库摘要不同于 `fetch-sherpa.sh` 锁定的板端测试库，构建记录明确区分两者；它不是现有私有完整包的替换包，不自动覆盖板端文件。现有板端导入与私有打包仍使用下面的流程，真实 UI、音频和 NPU 推理由用户验收。
 

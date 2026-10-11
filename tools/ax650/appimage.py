@@ -4,10 +4,12 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 HERE = Path(__file__).resolve().parent
@@ -24,6 +26,7 @@ linux = load("linux_appimage", HERE.parent / "linux/appimage.py")
 packaging = load("ax650_package", HERE / "package.py")
 native = load("ax650_native", HERE / "native-runtime.py")
 models = load("ax650_model_resources", HERE / "model-resources.py")
+runtime_deps = load("ax650_runtime_deps", HERE / "runtime-deps.py")
 
 APP_RUN = '''#!/usr/bin/env bash
 set -e
@@ -40,7 +43,24 @@ exec "$APPDIR/AppRun.tauri" "$@"
 '''
 
 
-def prepare(binaries, output, assets, resource_tag, native_root, provenance, loader, axera_assets, axera_resource_tag):
+def x11_runtime_files(directory=None):
+    # winit and the tray load these with dlopen: linuxdeploy/ldd cannot discover
+    # them from the executable's DT_NEEDED entries. Use the same library contract
+    # as the previously tested private AX650 packages, including their notices.
+    if directory is not None:
+        return packaging.runtime_files(directory)
+    files = []
+    for name, notice in packaging.RUNTIME_LIBRARIES.items():
+        source = (Path("/usr/lib/aarch64-linux-gnu") / name).resolve(strict=True)
+        packaging.verify_elf(source)
+        license_path = Path("/usr/share/doc") / notice.removesuffix(".copyright") / "copyright"
+        if not license_path.is_file() or not license_path.stat().st_size:
+            raise ValueError(f"runtime library license missing: {notice}")
+        files.extend([(source, Path("lib") / name), (license_path, Path("lib/licenses") / notice)])
+    return files
+
+
+def prepare(binaries, output, assets, resource_tag, native_root, provenance, loader, axera_assets, axera_resource_tag, runtime_libs=None):
     receipt = json.loads(provenance.read_text())
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=linux.ROOT, text=True).strip()
     if receipt.get("sherpa_revision") != native.REVISION or receipt.get("provider") != "axera" or receipt.get("source_commit") != commit:
@@ -58,6 +78,8 @@ def prepare(binaries, output, assets, resource_tag, native_root, provenance, loa
     for name in native.LICENSES:
         if not (native_root / "licenses" / name).is_file() or not (native_root / "licenses" / name).stat().st_size:
             raise ValueError(f"missing native license: {name}")
+    dynamic_files = {("usr/lib" if target.parent == Path("lib") else "usr/share/doc/desktoppet") + "/" + target.name: source
+                     for source, target in x11_runtime_files(runtime_libs)}
     linux.prepare(binaries, output, loader, assets, resource_tag, architecture="aarch64")
     resources = output / "resources"
     settings_path = resources / "voice-settings.json"
@@ -70,6 +92,7 @@ def prepare(binaries, output, assets, resource_tag, native_root, provenance, loa
     metadata["resource_files"].update(inventory)
     metadata.update(device_profile="ax650", rendering="software OpenGL", bundled_axera_models=True,
                     axera_models=model_receipt,
+                    x11_runtime=dict(files={name: linux.digest(path) for name, path in dynamic_files.items()}),
                     native_runtime=dict(sherpa_revision=native.REVISION, sdk_revision=receipt["sdk_revision"],
                                         origin=receipt["native_origin"], sdk_bundled=False,
                                         files={f"usr/lib/{name}": linux.digest(path) for name, path in libraries.items()}),
@@ -87,6 +110,7 @@ def prepare(binaries, output, assets, resource_tag, native_root, provenance, loa
             del files[target]
     files["/usr/bin/resources"] = str(resources)
     files.update({f"/usr/lib/{name}": str(path) for name, path in libraries.items()})
+    files.update({f"/{name}": str(path) for name, path in dynamic_files.items()})
     files.update({f"/usr/share/doc/desktoppet/{name}": str(native_root / "licenses" / name) for name in native.LICENSES})
     (output / "notices/README.txt").write_text('''DesktopPet AX650 ARM64 AppImage / Ubuntu 22.04 / XFCE X11
 
@@ -97,6 +121,7 @@ in transcription mode (ASR 2 threads, TTS 4 threads). For LLM/TTS configuration,
 switch the voice mode to recognition, conversation and speech.
 
 AXERA sherpa is included; the board supplies its matching SDK in /soc/lib.
+XKB/XCB and xdo runtime libraries and their licenses are explicitly bundled.
 The tested AX650 SenseVoice (10 seconds), ZipVoice distill (encoder and four
 decoder parts) and Vocos axmodels are included with matched tokens, manifest,
 lexicon and espeak data. Enable NPU acceleration in ASR / TTS settings to select
@@ -134,11 +159,28 @@ def finalize_tree(appdir):
         if path.parent != Path("usr/lib") or (path.name != "libsherpa-onnx-c-api.so" and not re.fullmatch(r"libonnxruntime\.so(?:\.\d+)*", path.name)):
             raise ValueError("native runtime path outside allowlist")
         runtime["files"][relative] = linux.digest(appdir / path)
+    dynamic = metadata["x11_runtime"]
+    dynamic["build_files"] = dict(dynamic["files"])
+    for relative in dynamic["files"]:
+        dynamic["files"][relative] = linux.digest(appdir / relative)
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
     return removed
 
 
-def audit(appdir, metadata):
+def check_x11_loads(appdir):
+    # A fresh process needs LD_LIBRARY_PATH before startup. Do not inherit the
+    # CI native/SDK library search path, which could hide missing packaged libs.
+    env = os.environ.copy()
+    env["LD_LIBRARY_PATH"] = str(appdir / "usr/lib")
+    env.pop("LD_PRELOAD", None)
+    libraries = [str(appdir / "usr/lib" / name) for name in packaging.RUNTIME_LIBRARIES]
+    code = ("import ctypes\n"
+            f"handles = [ctypes.CDLL(p) for p in {libraries!r}]\n"
+            f"[getattr(handles[0], s) for s in {runtime_deps.XKB_SYMBOLS!r}]\n")
+    subprocess.run([sys.executable, "-c", code], env=env, check=True, text=True)
+
+
+def audit(appdir, metadata, load_runtime=False):
     if metadata.get("device_profile") != "ax650" or metadata.get("rendering") != "software OpenGL":
         raise ValueError("AX650 software rendering profile missing")
     runtime = metadata["native_runtime"]
@@ -160,8 +202,25 @@ def audit(appdir, metadata):
         raise ValueError("AX650 launcher mismatch")
     if not (appdir / "AppRun.tauri").is_file():
         raise ValueError("Tauri launcher missing")
+    dynamic = metadata.get("x11_runtime", {}).get("files", {})
+    expected = {f"usr/lib/{name}" for name in packaging.RUNTIME_LIBRARIES} | {
+        f"usr/share/doc/desktoppet/{notice}" for notice in packaging.RUNTIME_LIBRARIES.values()}
+    if set(dynamic) != expected:
+        raise ValueError("XKB/XCB/xdo runtime or licenses missing from inventory")
+    dynamic_checks = {}
+    for relative, checksum in dynamic.items():
+        path = appdir / relative
+        if not path.is_file() or linux.digest(path) != checksum:
+            raise ValueError(f"X11 runtime changed or missing: {relative}")
+        if relative.startswith("usr/lib/"):
+            dynamic_checks[relative] = packaging.verify_elf(path.resolve())
+        elif not path.stat().st_size:
+            raise ValueError(f"empty X11 runtime license: {relative}")
+    if load_runtime:
+        check_x11_loads(appdir)
     model_checks = models.audit(appdir / "usr/bin/resources", metadata)
-    return dict(native_elf=checks, axera_models=model_checks, sdk_bundled=False, rendering="software OpenGL",
+    return dict(native_elf=checks, x11_elf=dynamic_checks, x11_load_checked=load_runtime,
+                axera_models=model_checks, sdk_bundled=False, rendering="software OpenGL",
                 scope="packaging and provenance only; no desktop, microphone or NPU inference")
 
 
@@ -193,7 +252,8 @@ def finish(image, output, expected_commit, report):
             destination.write(prefix)
             shutil.copyfileobj(source, destination)
         output.chmod(0o755)
-    linux.verify(output, expected_commit, report, "aarch64", extra_audit=audit)
+    linux.verify(output, expected_commit, report, "aarch64",
+                 extra_audit=lambda tree, metadata: audit(tree, metadata, load_runtime=True))
     print(json.dumps(dict(removed_sdk_libraries=removed)))
 
 
@@ -206,6 +266,7 @@ def main():
     stage.add_argument("--resource-tag", required=True)
     stage.add_argument("--axera-resource-tag", required=True)
     stage.add_argument("--vulkan-loader", type=Path, default=Path("/usr/lib/aarch64-linux-gnu/libvulkan.so.1"))
+    stage.add_argument("--runtime-libs", type=Path, help="verified XKB/XCB/xdo lib directory with licenses/; defaults to Ubuntu system packages")
     final = sub.add_parser("finish")
     for name in ("image", "output", "report"):
         final.add_argument("--" + name, required=True, type=Path)
@@ -214,7 +275,7 @@ def main():
     if args.command == "prepare":
         prepare(args.binaries.resolve(), args.output.resolve(), args.assets_dir.resolve(), args.resource_tag,
                 args.native.resolve(), args.native_provenance.resolve(), args.vulkan_loader,
-                args.axera_assets_dir.resolve(), args.axera_resource_tag)
+                args.axera_assets_dir.resolve(), args.axera_resource_tag, args.runtime_libs)
     else:
         finish(args.image, args.output, args.expected_commit, args.report)
 

@@ -104,8 +104,8 @@ jobs:
         run: bash tools/ax650/ci-native.sh "$AX650_CI_ROOT/sherpa" "$AX650_CI_ROOT/sdk" "$AX650_CI_ROOT/native"
       - name: Compile desktop application, avatar host and diagnostic CLI
         run: cargo build --locked --release -p desktop-pet -p avatar-host-2d -p desktop-pet-ax650
-      - name: Run pure application and voice regressions
-        run: cargo test --locked --release -p desktop-pet -p pet-voice-session
+      - name: Run application, voice pipeline and HTTP / Agent regressions
+        run: cargo test --locked --release -p desktop-pet -p pet-voice-session -p pet-inference-http -p pet-agent-runtime
       - name: Verify ARM64 / glibc and stage code-only artifact
         run: |
           python3 tools/ax650/package.py --verify-binaries target/release --include-cli
@@ -249,6 +249,10 @@ jobs:
           tag="ax650-v0.1.0-alpha.${GITHUB_RUN_NUMBER}"
           cat > release-notes.md <<EOF
           AX650 ARM64 AppImage built on Ubuntu 22.04 from commit \`${SOURCE_COMMIT}\`.
+
+          LLM body deltas now feed realtime sentence segmentation, a bounded ZipVoice synthesis queue and continuous playback. The next sentence can synthesize while the current audio plays; each spoken turn shares one output stream and resampler, removing the per-sentence device restart and fixed 80 ms wait. ZipVoice still synthesizes complete sentences. The user reported successful AX650 functional validation of the corresponding local test build.
+
+          Fixes the alpha.4 avatar startup failure by bundling XKB/XCB/xdo dynamic libraries and their licenses. The final extracted AppImage is checked for their actual dynamic loading, in addition to architecture, ABI and resource checks.
 
           Download **DesktopPet-AX650-aarch64.AppImage**, mark it executable and launch it from the existing XFCE X11 desktop. Software OpenGL and the AX650 device profile are enabled automatically. Character, interaction voices and CPU VAD/ASR/TTS/KWS models from \`${RESOURCE_TAG}\` are included. Settings and saves remain outside the image. Voice starts disabled in transcription mode; select recognition, conversation and speech for LLM / TTS settings. ASR / TTS defaults are 2 / 4 threads.
 

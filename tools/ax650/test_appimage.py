@@ -25,6 +25,11 @@ class Ax650AppImageTests(unittest.TestCase):
             (self.binaries / name).write_bytes(elf())
         self.loader = self.root / "libvulkan.so.1"
         self.loader.write_bytes(elf())
+        self.runtime_libs = self.root / "runtime-libs"
+        (self.runtime_libs / "licenses").mkdir(parents=True)
+        for name, notice in appimage.packaging.RUNTIME_LIBRARIES.items():
+            (self.runtime_libs / name).write_bytes(elf())
+            (self.runtime_libs / "licenses" / notice).write_text("Fixture X11 license\n")
         self.native = self.root / "native"
         (self.native / "lib").mkdir(parents=True)
         (self.native / "licenses").mkdir()
@@ -87,7 +92,7 @@ class Ax650AppImageTests(unittest.TestCase):
     def prepare(self):
         with contextlib.redirect_stdout(io.StringIO()):
             appimage.prepare(self.binaries, self.stage, self.assets, "fixture-resources",
-                             self.native, self.provenance, self.loader, self.axera_assets, "fixture-ax650")
+                             self.native, self.provenance, self.loader, self.axera_assets, "fixture-ax650", self.runtime_libs)
 
     def finalized(self):
         self.prepare()
@@ -108,6 +113,10 @@ class Ax650AppImageTests(unittest.TestCase):
         (tree / "AppRun").chmod(0o755)
         sdk = tree / "usr/lib/libax_engine.so"
         sdk.write_bytes(elf())
+        # Simulate linuxdeploy stripping/patching these explicit library inputs.
+        for name in appimage.packaging.RUNTIME_LIBRARIES:
+            with (tree / "usr/lib" / name).open("ab") as stream:
+                stream.write(b"fixture linuxdeploy transformed bytes")
         with self.assertRaises(ValueError):
             appimage.linux.audit(tree, self.commit, "aarch64")
         def patch_rpath(arguments, **_kwargs):
@@ -128,6 +137,10 @@ class Ax650AppImageTests(unittest.TestCase):
                             runtime["files"]["usr/lib/libsherpa-onnx-c-api.so"])
         self.assertEqual(runtime["files"]["usr/lib/libonnxruntime.so"],
                          runtime["files"]["usr/lib/libonnxruntime.so.1.28.2"])
+        dynamic = metadata["x11_runtime"]
+        for name in appimage.packaging.RUNTIME_LIBRARIES:
+            relative = f"usr/lib/{name}"
+            self.assertNotEqual(dynamic["build_files"][relative], dynamic["files"][relative])
 
     def test_image_contains_locked_axmodels_and_complete_frontend(self):
         tree = self.finalized()
@@ -139,6 +152,56 @@ class Ax650AppImageTests(unittest.TestCase):
         (tree / "usr/bin/resources/models/axera/zipvoice/decoder_part3.axmodel").unlink()
         with self.assertRaises((ValueError, appimage.packaging.PackageError)):
             appimage.audit(tree, metadata)
+
+    def test_dlopen_dependencies_and_licenses_are_required_in_final_image(self):
+        tree = self.finalized()
+        metadata = appimage.linux.audit(tree, self.commit, "aarch64")
+        result = appimage.audit(tree, metadata)
+        self.assertEqual(set(result["x11_elf"]), {f"usr/lib/{name}" for name in appimage.packaging.RUNTIME_LIBRARIES})
+        for relative in metadata["x11_runtime"]["files"]:
+            path = tree / relative
+            original = path.read_bytes()
+            path.unlink()
+            with self.assertRaises(ValueError):
+                appimage.audit(tree, metadata)
+            path.write_bytes(original + b"tampered")
+            with self.assertRaises(ValueError):
+                appimage.audit(tree, metadata)
+            path.write_bytes(original)
+
+    def test_runtime_inputs_reject_missing_library_license_foreign_architecture_and_new_glibc(self):
+        path = self.runtime_libs / "libxkbcommon-x11.so.0"
+        for content in (None, elf(machine=62), elf(glibc="2.36")):
+            if content is None:
+                path.unlink()
+            else:
+                path.write_bytes(content)
+            with self.assertRaises((ValueError, FileNotFoundError)):
+                self.prepare()
+            self.assertFalse(self.stage.exists())
+        path.write_bytes(elf())
+        (self.runtime_libs / "licenses/libxcb-xkb1.copyright").unlink()
+        with self.assertRaises(ValueError):
+            self.prepare()
+        self.assertFalse(self.stage.exists())
+
+    def test_final_runtime_load_does_not_inherit_ci_search_paths_and_checks_xkb_symbols(self):
+        tree = self.finalized()
+        metadata = appimage.linux.audit(tree, self.commit, "aarch64")
+        with patch.dict(appimage.os.environ, LD_LIBRARY_PATH="/ci/native:/ci/sdk", LD_PRELOAD="/ci/extra.so"):
+            with patch.object(appimage.subprocess, "run") as run:
+                result = appimage.audit(tree, metadata, load_runtime=True)
+                self.assertTrue(result["x11_load_checked"])
+                arguments, kwargs = run.call_args
+                self.assertEqual(kwargs["env"]["LD_LIBRARY_PATH"], str(tree / "usr/lib"))
+                self.assertNotIn("LD_PRELOAD", kwargs["env"])
+                for name in appimage.packaging.RUNTIME_LIBRARIES:
+                    self.assertIn(str(tree / "usr/lib" / name), arguments[0][-1])
+                for symbol in appimage.runtime_deps.XKB_SYMBOLS:
+                    self.assertIn(symbol, arguments[0][-1])
+            with patch.object(appimage.subprocess, "run", side_effect=subprocess.CalledProcessError(1, "runtime check")):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    appimage.audit(tree, metadata, load_runtime=True)
 
     def test_remote_checksum_cannot_replace_locked_model_archive(self):
         archive = self.axera_assets / "models-axera.zip"

@@ -128,3 +128,31 @@ NPU 不会默认直接执行现有 ONNX，也不是通用图形 GPU。若采用 
 最终[手动构建 38110231975](https://github.com/Abandon-ht/DesktopPet/actions/runs/38110231975)全部成功，源码 `d58436ec8fd17c29fb47a9641515b7925baef111`，发布[AX650 alpha 4](https://github.com/Abandon-ht/DesktopPet/releases/tag/ax650-v0.1.0-alpha.4)。Ubuntu 22.04 ARM64 编译三个程序通过；52 项工具回归、14 项桌面与 15 项语音纯回归通过，3 项设备 / 网络测试仍忽略；12 个 C / Rust 结构 ABI 一致。最终 AppImage 已用相同 runtime 重新提取，确认 NPU 资源全部 374 项摘要与锁文件一致（其中 7 个 axmodel）、SDK 库未打包，主程序 / 宿主最高 GLIBC 分别为 2.34 / 2.35。
 
 发布 AppImage 为 799,644,168 字节，SHA-256 `6c65544ed25f3643d26e89b3b7152d9d2dfa58c01494895e29c459971b63babc`；GitHub 返回的资产摘要与 `SHA256SUMS.txt`、审计记录一致。独立 NPU 资源 Release 也已发布并核对服务器摘要。板卡离线，本轮没有连接板端，也未做实际角色、麦克风、播放或 NPU 推理验收。
+
+## alpha.4 板端启动修复（2026-10-11）
+
+随后连接板卡读取 alpha.4 的 `error.log`：Tauri 主程序启动，角色宿主三次在 `xkbcommon-dl` 的 X11 入口 panic，报 `Library libxkbcommon-x11.so could not be loaded`，监督器最终进入 fault。板上未安装 `libxkbcommon-x11-0` / `libxcb-xkb1`，AppImage 也未带入这两个库。它们由 winit 动态加载，直接链接的 `ldd` 检查与 linuxdeploy 自动收集均遗漏。此前私有完整包已显式携带这些库及 xdo，本次 AppImage 路径未沿用该依赖契约。
+
+修复当前解包目录，补入此前私有包的 `libxkbcommon-x11.so.0`、`libxcb-xkb.so.1`、`libxdo.so.3` 和许可证；未修改板上系统包、应用二进制或原始下载文件。使用独立临时数据目录运行完整入口 25 秒，主程序与角色宿主进入 ready，无重试或崩溃；软件 GL / llvmpipe 初始化成功，32 位 alpha visual 与合成器证据通过，X11 树出现 320×384 角色窗口与 480×760 设置窗口，结束后清理本次进程。这证明启动问题已消除，尚不证明用户目视、托盘操作或语音/NPU验收。
+
+打包工具同时显式映射三项库和许可证，验证 ARM64 / GLIBC 2.35 基线，并记录打包前后摘要。最终 AppImage 重新提取后必须校验所有库与许可证，再用清除 CI 搜索路径的子进程执行实际动态加载及四个 XKB 入口检查。新增回归覆盖缺库、缺许可证、篡改、错误架构、过新 GLIBC、linuxdeploy 改写摘要和加载失败；AX650 38 项、共享 Linux 17 项打包回归通过。原日志中的 ALSA / JACK 提示属于音频枚举，未作为角色启动失败原因；真实音频设备另行验收。
+
+修复版最终在 macOS 的 Ubuntu 22.04 ARM64 Docker 容器中生成，保留 alpha.4 的应用二进制和资源，仅补运行依赖、许可证及修复来源记录；不是新的 GitHub Release。容器内 55 项打包回归、最终 AppImage 提取审核、XKB 动态加载、374 项 NPU 资源摘要与 SDK 排除检查均通过。产物 `DesktopPet-AX650-alpha4-xkb-hotfix-aarch64.AppImage` 为 799,701,512 字节，SHA-256 `d6768f325d928c7317d50568bff8292cd39357e501adb8ec458d1d343168790a`。后续本地编译和打包优先在 macOS Docker 完成，板卡只传包和运行验证。
+
+修复包传回板卡后再次核对 SHA-256，使用 `--appimage-extract-and-run` 直接运行最终 AppImage 和独立测试数据目录。完整程序进入 ready 后继续观察 10 秒，未出现 recovering / fault；X11 树确认角色与设置窗口，随后退出本次进程。此次最终包验证没有依赖先前修好的持久解包目录。
+
+## 正文增量驱动合成与连续播放（2026-10-11）
+
+此前所有已发布 alpha 的 LLM 增量只用于更新界面：等待完整回答，再串行执行“合成一句、播放一句”；每句重新建立 CPAL 输出流并额外等待 80 ms。`ax650` 当前分支改为 LLM 正文增量 → 实时分句 → 有界 TTS 合成队列 → 持续播放。首段按句末标点或 40 字符提交，后续上限 80 字符；只保留一个 ZipVoice 合成任务，播放时可以合成后文。联网工具规划不朗读，确定的最终回答和原生摘要回退接入正文流；首轮无工具的完整回答及固定天气文本仍一次性提交。
+
+每轮回复共用一条 CPAL 输出流和持续重采样器，上游四个 250 ms PCM 块加设备层 2 秒预分配环形缓冲，合计约 3 秒待播 PCM，另有当前合成结果与传递中的块。首段预缓冲最多 120 ms，短回复可提前启动；ALSA 提前调用输出回调时先输出静音，不抢先消费。完成时按最后消费样本的预测输出时间耗尽一次，设备时间不可用时才使用有界尾部保护。取消会使旧队列立即静音，队列等待和下一块轮询均检查取消及设备故障；故障保存根错误后中止同轮其他工作线程。
+
+`voice_pipeline` 记录首句提交和 LLM 结束时间，`voice_tts` 记录每句合成耗时、音长、RTF 及背压耗时，`voice_playback` 记录首个消费回调、待播队列峰值、欠载次数/静音时长与最终耗尽时间。这些诊断不记录正文或 PCM。首个消费回调时间不能视为经过真实扬声器测量的首音时间。ZipVoice 仍先生成整句 PCM；当合成耗时超过待播音长时仍可能欠载，需要板端试听与日志测量。
+
+Ubuntu 22.04 ARM64 Docker 中 69 项 Rust 回归通过，7 项既有网络/实机测试保持忽略；包含首句播放早于 LLM 结束、播放期间下一句合成、队列满时取消与故障、源标签跨增量、PCM 连续性、尾部耗尽、ALSA 提前回调及 Pending 时设备故障。语音、HTTP、Agent 和桌面模块的 all-targets 严格 Clippy（`--no-deps`）通过；55 项打包回归通过。编译和打包使用 macOS Docker，板端只接收测试包和验证启动，真实 LLM/NPU/TTS 听感交由用户验收。
+
+本地测试 AppImage 为 `DesktopPet-AX650-streaming-tts-aarch64.AppImage`，797,821,448 字节，SHA-256 `0f95f7c95b5f33d10e9f0ebb84f226ee383505d52eec479375beff2cbe4629c3`。当前 HEAD `d886797` 加本地修改及新二进制摘要写入元数据，公共资源沿用 alpha.4；最终重新提取审核、374 项 NPU 资源摘要、XKB 动态加载和 SDK 排除通过，主程序/角色宿主最高 GLIBC 仍为 2.34/2.35。传到板卡后核对摘要，在磁盘临时目录使用 `--appimage-extract-and-run` 和独立数据运行，含提取约 22.4 秒进入 ready 后继续观察 10 秒，无 recovering/fault；随后退出本次进程。测试脚本最初遗漏标准错误中的状态而误报超时，修正双流读取后复核通过，应用日志未显示启动故障。
+
+板端用户入口为 `/root/Desktop/run-streaming.sh`，日志写入 `/root/Desktop/streaming-tts-error.log`；原启动脚本保留，检查只向本次独立进程组发送退出信号。测试前应从托盘退出旧版。当前源码同时生成 macOS arm64 `.app`，主程序/嵌套角色宿主 bundle 与 ad-hoc 签名验证通过，位于忽略目录 `artifacts/local/ax650-streaming-tts-20261011/`。此次未发布新 Release。
+
+用户随后完成上述本地测试包的板端验收，反馈“功能一切正常”，并授权提交、推送及触发 Actions 发布新包。AX650 手动工作流同时纳入 HTTP / Agent 的正文流回归，发布说明记录连续语音流水线与动态 X11 库修复。此反馈对应本地测试包；新 CI 包继续独立执行编译、ABI、资源及最终提取审核。
