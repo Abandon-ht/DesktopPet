@@ -8,6 +8,8 @@
 
 流程检查 C / Rust ABI、工具回归、纯应用与语音回归，编译完整桌宠、角色宿主和诊断 CLI，并检查 ARM64、GLIBC ≤ 2.35 和直接动态依赖。保留代码产物 `DesktopPet-AX650-arm64-binaries`，同时生成 `DesktopPet-AX650-AppImage`，二者保留 14 天。勾选 `publish_release`（默认开启）后，把审核通过的 AppImage、SHA-256 和审计记录发布为 `ax650-v0.1.0-alpha.<run-number>` 预发布版。
 
+已发布并审核通过的完整包：[AX650 alpha 4](https://github.com/Abandon-ht/DesktopPet/releases/tag/ax650-v0.1.0-alpha.4)，源码 `d58436ec8fd17c29fb47a9641515b7925baef111`。对应[手动构建](https://github.com/Abandon-ht/DesktopPet/actions/runs/38110231975)成功；包含 CPU 与 NPU 模型，最终提取确认 7 个 axmodel / 374 个 NPU 配套文件。使用方法见 [板端启动说明](../../BUILDING.ax650.zh-CN.md)。
+
 AppImage 使用公共资源 Release（默认 `resources-2026-09-29`）中的角色、互动语音及 CPU VAD / ASR / TTS / KWS，同时必须下载 AX650 资源 Release `resources-ax650-2026-10-11` 的 `models-axera.zip`。后者内置此前交付板端的 SenseVoice 10 秒 axmodel、ZipVoice distill encoder / 四段 decoder、Vocos，以及匹配词表、version 1 清单、lexicon 和 espeak 数据。勾选 ASR / TTS 的 NPU 开关后自动选择包内目录；取消后选择 CPU 模型。
 
 `model-resources.lock.json` 固定 ZIP 摘要和全部 374 个文件的 SHA-256 / 大小；373 个已有文件在发布前与此前板端交付包逐一比对，新增 ZipVoice 上游许可证，并补充 Vocos / espeak 许可说明。`model-resources.py` 只选择已测试模型与前端，拒绝替换的 Release 摘要、缺失分段、额外文件及用户参考声音。权重留在 Release，不进入 Git。

@@ -138,6 +138,8 @@ DesktopPet-AX650-full/
 
 下载 `DesktopPet-AX650-aarch64.AppImage` 后，在板端现有 XFCE 终端启动：
 
+当前已通过构建和打包审计的完整版本：[AX650 alpha 4](https://github.com/Abandon-ht/DesktopPet/releases/tag/ax650-v0.1.0-alpha.4)。其 AppImage 已内置 CPU / NPU 模型，配套 `SHA256SUMS.txt` 和 `appimage-audit.json` 可核对来源与资源摘要。
+
 ```sh
 chmod +x DesktopPet-AX650-aarch64.AppImage
 ./DesktopPet-AX650-aarch64.AppImage

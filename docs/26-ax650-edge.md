@@ -124,3 +124,7 @@ NPU 不会默认直接执行现有 ONNX，也不是通用图形 GPU。若采用 
 板卡离线时仍可完成模型归档、纯回归、ARM64 编译、AppImage 重新提取审核和 GitHub 发布；不尝试连接或更改板端。当前构建流程仍仅手动触发，真实角色、托盘、麦克风、TTS 播放和应用内 NPU 推理由用户上线后验收，不要求稳定 30 fps。
 
 加入 NPU 资源后的手动构建通过编译、纯回归和资源校验，但 Tauri 调用 `cargo metadata` 报 `Argument list too long`：逐文件映射使 `TAURI_CONFIG` 超过 Linux 的单个环境字符串长度限制。按固定 Tauri 2.11.4 的 `copy_custom_files` 目录递归复制机制，改为单条资源目录映射，完整逐文件摘要仍保存在包内 `release.json` 并在最终提取后复查。新增包含 1000 个长名称声音文件的回归，验证配置保持小于 16 KiB 且资源完整。
+
+最终[手动构建 38110231975](https://github.com/Abandon-ht/DesktopPet/actions/runs/38110231975)全部成功，源码 `d58436ec8fd17c29fb47a9641515b7925baef111`，发布[AX650 alpha 4](https://github.com/Abandon-ht/DesktopPet/releases/tag/ax650-v0.1.0-alpha.4)。Ubuntu 22.04 ARM64 编译三个程序通过；52 项工具回归、14 项桌面与 15 项语音纯回归通过，3 项设备 / 网络测试仍忽略；12 个 C / Rust 结构 ABI 一致。最终 AppImage 已用相同 runtime 重新提取，确认 NPU 资源全部 374 项摘要与锁文件一致（其中 7 个 axmodel）、SDK 库未打包，主程序 / 宿主最高 GLIBC 分别为 2.34 / 2.35。
+
+发布 AppImage 为 799,644,168 字节，SHA-256 `6c65544ed25f3643d26e89b3b7152d9d2dfa58c01494895e29c459971b63babc`；GitHub 返回的资产摘要与 `SHA256SUMS.txt`、审计记录一致。独立 NPU 资源 Release 也已发布并核对服务器摘要。板卡离线，本轮没有连接板端，也未做实际角色、麦克风、播放或 NPU 推理验收。
