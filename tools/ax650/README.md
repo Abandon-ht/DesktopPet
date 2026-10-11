@@ -12,7 +12,7 @@ AppImage 使用公共资源 Release（默认 `resources-2026-09-29`）中的角�
 
 `model-resources.lock.json` 固定 ZIP 摘要和全部 374 个文件的 SHA-256 / 大小；373 个已有文件在发布前与此前板端交付包逐一比对，新增 ZipVoice 上游许可证，并补充 Vocos / espeak 许可说明。`model-resources.py` 只选择已测试模型与前端，拒绝替换的 Release 摘要、缺失分段、额外文件及用户参考声音。权重留在 Release，不进入 Git。
 
-`appimage.py` 复用 Linux 资源审计，加入 ARM64 sidecar / ELF 检查、AX650 软件 GL 启动器和 shared sherpa / ONNX Runtime。发布前移除 linuxdeploy 带入的 AXERA SDK 库，保留 `/soc/lib` 链接入口，分别记录编译输入和打包后原生库摘要。最终重打包使用启动器支持的 zstd 压缩，再由同一启动器提取最终 AppImage，复查资源、模型、架构、GLIBC、启动器及隐私规则。用户参考声音和存档不进入发布包。
+`appimage.py` 复用 Linux 资源审计，加入 ARM64 sidecar / ELF 检查、AX650 软件 GL 启动器和 shared sherpa / ONNX Runtime。已审核的资源目录使用单条 Tauri 目录映射；逐文件清单放在包内 `release.json`，避免 Tauri 向 Cargo 传递 `TAURI_CONFIG` 时超过 Linux 单个环境变量 128 KiB 限制。发布前移除 linuxdeploy 带入的 AXERA SDK 库，保留 `/soc/lib` 链接入口，分别记录编译输入和打包后原生库摘要。最终重打包使用启动器支持的 zstd 压缩，再由同一启动器提取最终 AppImage，复查资源、模型、架构、GLIBC、启动器及隐私规则。用户参考声音和存档不进入发布包。
 
 CI 从源码生成的原生库摘要不同于 `fetch-sherpa.sh` 锁定的板端测试库，构建记录明确区分两者；它不是现有私有完整包的替换包，不自动覆盖板端文件。现有板端导入与私有打包仍使用下面的流程，真实 UI、音频和 NPU 推理由用户验收。
 

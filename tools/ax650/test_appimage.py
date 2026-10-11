@@ -96,7 +96,10 @@ class Ax650AppImageTests(unittest.TestCase):
         for relative, source in config["bundle"]["linux"]["appimage"]["files"].items():
             target = tree / relative.lstrip("/")
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+            if Path(source).is_dir():
+                shutil.copytree(source, target)
+            else:
+                shutil.copy2(source, target)
         for name in ("desktop-pet", "avatar-host-2d"):
             shutil.copy2(self.binaries / name, tree / "usr/bin" / name)
         for name in ("WebKitWebProcess", "WebKitNetworkProcess"):
@@ -160,6 +163,22 @@ class Ax650AppImageTests(unittest.TestCase):
         self.write_model_checks()
         with self.assertRaises(ValueError):
             self.prepare()
+
+    def test_large_resource_set_does_not_exceed_linux_config_environment_limit(self):
+        archive = self.assets / "voice.zip"
+        with zipfile.ZipFile(archive, "w") as voices:
+            for i in range(1000):
+                voices.writestr(f"voice/zh-CN/care/{i:04d}-{'long-resource-name-' * 6}.wav", "fixture")
+        checks_path = self.assets / "SHA256SUMS.json"
+        checks = json.loads(checks_path.read_text())
+        checks[archive.name] = dict(sha256=appimage.linux.digest(archive), bytes=archive.stat().st_size)
+        checks_path.write_text(json.dumps(checks))
+        tree = self.finalized()
+        config = json.loads((self.stage / "tauri-appimage.conf.json").read_text())
+        self.assertLess(len(json.dumps(config).encode()), 16 * 1024)
+        metadata = appimage.linux.audit(tree, self.commit, "aarch64")
+        self.assertEqual(len([name for name in metadata["resource_files"] if name.startswith("voice/")]), 1000)
+        appimage.audit(tree, metadata)
 
     def test_tampered_native_library_or_launcher_is_rejected(self):
         tree = self.finalized()

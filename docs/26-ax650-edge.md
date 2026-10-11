@@ -122,3 +122,5 @@ NPU 不会默认直接执行现有 ONNX，也不是通用图形 GPU。若采用 
 373 个本地已有模型 / 前端文件与此前板端完整交付包逐一比对；本次仅增加上游许可证及补充 NOTICE，不更换模型与前端字节。原 HF 文件按固定 revision 校验，最终 ZIP、全部 374 个文件和来源记录锁定于 `tools/ax650/model-resources.lock.json`。CI 必须验证并内置该集合；资源缺失、被替换或多出参考声音时失败。权重上传资源 Release，Git 仅保存工具、来源和摘要。
 
 板卡离线时仍可完成模型归档、纯回归、ARM64 编译、AppImage 重新提取审核和 GitHub 发布；不尝试连接或更改板端。当前构建流程仍仅手动触发，真实角色、托盘、麦克风、TTS 播放和应用内 NPU 推理由用户上线后验收，不要求稳定 30 fps。
+
+加入 NPU 资源后的手动构建通过编译、纯回归和资源校验，但 Tauri 调用 `cargo metadata` 报 `Argument list too long`：逐文件映射使 `TAURI_CONFIG` 超过 Linux 的单个环境字符串长度限制。按固定 Tauri 2.11.4 的 `copy_custom_files` 目录递归复制机制，改为单条资源目录映射，完整逐文件摘要仍保存在包内 `release.json` 并在最终提取后复查。新增包含 1000 个长名称声音文件的回归，验证配置保持小于 16 KiB 且资源完整。

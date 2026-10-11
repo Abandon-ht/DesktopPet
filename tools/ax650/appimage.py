@@ -78,7 +78,14 @@ def prepare(binaries, output, assets, resource_tag, native_root, provenance, loa
     config_path = output / "tauri-appimage.conf.json"
     config = json.loads(config_path.read_text())
     files = config["bundle"]["linux"]["appimage"]["files"]
-    files.update({f"/usr/bin/resources/{name}": str(resources / name) for name in inventory})
+    # Tauri serializes this config into TAURI_CONFIG for cargo. A per-file map
+    # exceeds Linux's 128 KiB single-environment-string limit with NPU frontend
+    # data. Its pinned bundler copies directory mappings recursively; keep the
+    # full per-file hashes in release.json, outside that environment variable.
+    for target in list(files):
+        if target.startswith("/usr/bin/resources/"):
+            del files[target]
+    files["/usr/bin/resources"] = str(resources)
     files.update({f"/usr/lib/{name}": str(path) for name, path in libraries.items()})
     files.update({f"/usr/share/doc/desktoppet/{name}": str(native_root / "licenses" / name) for name in native.LICENSES})
     (output / "notices/README.txt").write_text('''DesktopPet AX650 ARM64 AppImage / Ubuntu 22.04 / XFCE X11
