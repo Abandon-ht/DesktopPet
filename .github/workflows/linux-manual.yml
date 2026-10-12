@@ -93,8 +93,8 @@ jobs:
             --dir artifacts/local/release-assets --pattern avatar.zip --pattern voice.zip \
             --pattern models-vad.zip --pattern models-asr.zip --pattern models-tts.zip \
             --pattern models-kws.zip --pattern SHA256SUMS.json
-      - name: Run application, host and persistence tests
-        run: cargo +1.95.0 test --locked -p desktop-pet -p avatar-host-2d -p pet-persistence
+      - name: Run application, host, persistence and speech streaming tests
+        run: cargo +1.95.0 test --locked -p desktop-pet -p avatar-host-2d -p pet-persistence -p pet-voice-session -p pet-inference-http -p pet-agent-runtime
       - name: Compile both release executables
         run: cargo +1.95.0 build --locked --release -p desktop-pet -p avatar-host-2d
       - uses: actions/setup-node@v4
