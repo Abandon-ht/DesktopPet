@@ -95,3 +95,13 @@ flowchart LR
 测试覆盖首音早于 LLM 结束、播放与后句合成重叠、句序与尾句、跨增量小数和来源编号、队列背压、取消、错误传播、单次输出启动、重采样连续性和尾部耗尽。普通聊天正文可实时分句；联网工具规划不播报，最终回答或原生摘要回退走正文流，非流式回复在完整返回后入队。ZipVoice 仍按句离线生成 PCM；合成慢于待播音频时会有欠载静音，持续输出流不保证无间断音频。
 
 各平台手动构建流程须运行 `cargo +1.95.0 test --locked -p pet-voice-session -p pet-inference-http -p pet-agent-runtime`。测试不打开真实麦克风或扬声器；真实设备听感、取消延迟、蓝牙与热切换须分别验收，编译成功不代替声音验收。
+
+本轮验证结果：
+
+| 范围 | 已完成的验证 |
+| --- | --- |
+| macOS arm64 | 48 项语音 / HTTP / Agent 回归与 12 项桌面回归通过；三个语音相关 crate 的 all-targets 严格 Clippy、两程序 release 编译通过；完整应用和嵌套宿主的 bundle、arm64 格式及 ad-hoc 签名验证通过。 |
+| Linux | Ubuntu 22.04 ARM64 Docker 的 48 项回归、三个语音相关 crate 的 all-targets 严格 Clippy和两程序 release 编译通过；使用官方 1.13.8 CPU 静态库与 ALSA。此次没有 x86_64 构建或真实音频设备结论。 |
+| Windows / NVIDIA 分支 | 分别移植共用流水线，保留 Ollama 的 `disable_thinking` 设置；新增最终正文流也发送 `reasoning_effort: none`，有开启 / 关闭的请求回归。Windows 分支的 48 项相关回归在 macOS 通过；NVIDIA 分支 all-targets 检查通过。使用隔离编译试件将真实 `local_playback`、轮次取消类型及其测试以 `x86_64-pc-windows-msvc` / WASAPI 检查通过，sherpa docs 模式跳过 C 库链接。完整 Windows 应用的原生链接、安装包及真实 WASAPI 试听仍需 Windows 构建机与设备验证。 |
+
+以上回归均保留 7 项需要网络、模型或实机的既有忽略测试；不将忽略项计为通过。三端构建入口已纳入流水线回归。实现保存在 `codex/macos-streaming-voice`、`codex/linux-streaming-voice`、`codex/windows-streaming-voice` 及 `codex/windows-nvidia-streaming-voice` 本地分支，分别基于原平台分支；原平台发布记录仍对应此前的串行实现。
