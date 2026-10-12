@@ -1,6 +1,6 @@
 use crate::{
-    AsrBackend, AsrPort, InputPort, LlmBackend, LlmPort, NoSpeechTimeout, Pcm, PlaybackPort,
-    TtsPort, TurnToken, VoicePipeline, VoiceSettings,
+    AsrBackend, AsrPort, InputPort, LlmBackend, LlmPort, NoSpeechTimeout, Pcm, PlaybackItem,
+    PlaybackPort, TtsPort, TurnToken, VoicePipeline, VoiceSettings,
 };
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use cpal::{
@@ -24,11 +24,14 @@ use std::{
     process::{Command, Stdio},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, SyncSender},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[path = "local_playback.rs"]
+mod playback;
 
 fn file(path: &Path) -> Result<String> {
     ensure!(path.is_file(), "模型或音频文件不存在：{}", path.display());
@@ -544,10 +547,10 @@ pub fn listen_for_keyword(
         kws_stream.accept_waveform(16000, &samples);
         while spotter.is_ready(&kws_stream) {
             spotter.decode(&kws_stream);
-            if let Some(result) = spotter.get_result(&kws_stream) {
-                if !result.keyword.is_empty() {
-                    return Ok(Some(result.keyword));
-                }
+            if let Some(result) = spotter.get_result(&kws_stream)
+                && !result.keyword.is_empty()
+            {
+                return Ok(Some(result.keyword));
             }
         }
     }
@@ -774,7 +777,7 @@ impl LlmPort for LmStudioDialogue {
             };
             let answer = self.runtime.block_on(async {
                 tokio::select! {
-                    result = agent.run_with_context(text, &system, if self.remember_context { &self.web_history } else { &[] }) => result,
+                    result = agent.run_with_context_stream(text, &system, if self.remember_context { &self.web_history } else { &[] }, on_delta) => result,
                     _ = cancel => Err(anyhow!("voice turn cancelled")),
                 }
             })?;
@@ -787,7 +790,6 @@ impl LlmPort for LmStudioDialogue {
                     self.web_history.remove(0);
                 }
             }
-            on_delta(&answer.answer_text);
             return Ok(answer.answer_text);
         }
         let answer = if self.kind == LlmBackend::LmStudio && !memory_enabled {
@@ -822,14 +824,13 @@ impl LlmPort for LmStudioDialogue {
             }
             answer
         };
-        if token.is_current() && memory_enabled {
-            if let Some(store) = self.memory.as_mut() {
-                if let Ok(Some((_, epoch))) = store.append_turn(text, &answer, utc_ms()) {
-                    if let Some(sender) = &self.memory_jobs {
-                        let _ = sender.try_send(MemoryJob { epoch });
-                    }
-                }
-            }
+        if token.is_current()
+            && memory_enabled
+            && let Some(store) = self.memory.as_mut()
+            && let Ok(Some((_, epoch))) = store.append_turn(text, &answer, utc_ms())
+            && let Some(sender) = &self.memory_jobs
+        {
+            let _ = sender.try_send(MemoryJob { epoch });
         }
         Ok(answer)
     }
@@ -993,119 +994,23 @@ pub fn play_wav_with_volume(path: &Path, token: &TurnToken, volume_percent: u8) 
 }
 impl PlaybackPort for SpeakerOutput {
     fn play(&mut self, pcm: &Pcm, token: &TurnToken) -> Result<()> {
-        token.check()?;
-        let device = cpal::default_host()
-            .default_output_device()
-            .context("没有扬声器输出设备")?;
-        let supported = device
-            .default_output_config()
-            .context("无法读取扬声器格式")?;
-        let channels = supported.channels() as usize;
-        ensure!(channels > 0 && pcm.sample_rate > 0, "无效输出格式");
-        let out_rate = supported.sample_rate().0;
-        let samples = if out_rate == pcm.sample_rate {
-            pcm.samples.clone()
-        } else {
-            LinearResampler::create(pcm.sample_rate as i32, out_rate as i32)
-                .context("扬声器重采样器创建失败")?
-                .resample(&pcm.samples, true)
-        };
-        ensure!(!samples.is_empty(), "播放音频为空");
-        let samples = Arc::new(samples);
-        let position = Arc::new(AtomicUsize::new(0));
-        let failed = Arc::new(AtomicBool::new(false));
-        let stream = output_stream(
-            &device,
-            &supported.config(),
-            supported.sample_format(),
-            channels,
-            samples.clone(),
-            position.clone(),
-            failed.clone(),
-            token.clone(),
-            self.gain,
-        )?;
-        stream.play().context("扬声器播放启动失败")?;
-        while position.load(Ordering::Acquire) < samples.len() {
-            token.check()?;
-            ensure!(!failed.load(Ordering::Acquire), "扬声器播放失败或设备断开");
-            std::thread::sleep(Duration::from_millis(8));
-        }
-        // The callback has filled its final buffer; allow CoreAudio's queued
-        // frames to drain before dropping the stream.
-        std::thread::sleep(Duration::from_millis(80));
-        token.check()?;
-        Ok(())
+        let mut single = Some(pcm.clone());
+        self.play_stream(
+            &mut || {
+                Ok(single
+                    .take()
+                    .map(PlaybackItem::Audio)
+                    .unwrap_or(PlaybackItem::End))
+            },
+            token,
+        )
     }
-}
 
-fn output_stream(
-    device: &cpal::Device,
-    config: &StreamConfig,
-    format: SampleFormat,
-    channels: usize,
-    samples: Arc<Vec<f32>>,
-    position: Arc<AtomicUsize>,
-    failed: Arc<AtomicBool>,
-    token: TurnToken,
-    gain: f32,
-) -> Result<cpal::Stream> {
-    let stream = match format {
-        SampleFormat::F32 => device.build_output_stream(
-            config,
-            move |data: &mut [f32], _| {
-                for frame in data.chunks_mut(channels) {
-                    let i = position.fetch_add(1, Ordering::AcqRel);
-                    let value = if token.is_current() {
-                        samples.get(i).copied().unwrap_or(0.0)
-                    } else {
-                        0.0
-                    };
-                    frame.fill((value * gain).clamp(-1.0, 1.0));
-                }
-            },
-            move |_| {
-                failed.store(true, Ordering::Release);
-            },
-            None,
-        )?,
-        SampleFormat::I16 => device.build_output_stream(
-            config,
-            move |data: &mut [i16], _| {
-                for frame in data.chunks_mut(channels) {
-                    let i = position.fetch_add(1, Ordering::AcqRel);
-                    let value = if token.is_current() {
-                        samples.get(i).copied().unwrap_or(0.0)
-                    } else {
-                        0.0
-                    };
-                    frame.fill(((value * gain).clamp(-1.0, 1.0) * i16::MAX as f32) as i16);
-                }
-            },
-            move |_| {
-                failed.store(true, Ordering::Release);
-            },
-            None,
-        )?,
-        SampleFormat::U16 => device.build_output_stream(
-            config,
-            move |data: &mut [u16], _| {
-                for frame in data.chunks_mut(channels) {
-                    let i = position.fetch_add(1, Ordering::AcqRel);
-                    let value = if token.is_current() {
-                        samples.get(i).copied().unwrap_or(0.0)
-                    } else {
-                        0.0
-                    };
-                    frame.fill((((value * gain).clamp(-1.0, 1.0) + 1.0) * 32767.5) as u16);
-                }
-            },
-            move |_| {
-                failed.store(true, Ordering::Release);
-            },
-            None,
-        )?,
-        _ => bail!("扬声器采样格式暂不支持：{format:?}"),
-    };
-    Ok(stream)
+    fn play_stream(
+        &mut self,
+        next: &mut dyn FnMut() -> Result<PlaybackItem>,
+        token: &TurnToken,
+    ) -> Result<()> {
+        playback::play_stream(self.gain, next, token)
+    }
 }
