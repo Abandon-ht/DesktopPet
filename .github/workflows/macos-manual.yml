@@ -30,6 +30,8 @@ jobs:
             --dir artifacts/local/release-assets \
             --pattern '*.zip' \
             --pattern 'SHA256SUMS.json'
+      - name: Test incremental speech, HTTP body streams and Agent final answers
+        run: cargo +1.95.0 test --locked -p pet-voice-session -p pet-inference-http -p pet-agent-runtime
       - name: Compile application and avatar host
         run: cargo +1.95.0 build --locked --release -p desktop-pet -p avatar-host-2d
       - name: Assemble and ad-hoc sign macOS app
