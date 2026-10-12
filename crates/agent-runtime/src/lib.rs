@@ -196,9 +196,22 @@ impl Agent<'_> {
         persona: &str,
         history: &[(String, String)],
     ) -> Result<AgentAnswer> {
+        self.run_with_context_stream(question, persona, history, |_| {})
+            .await
+    }
+
+    /// Only a definitive answer is exposed: tool planning never reaches the
+    /// callback. A first round that chooses no tools is emitted once complete.
+    pub async fn run_with_context_stream(
+        &self,
+        question: &str,
+        persona: &str,
+        history: &[(String, String)],
+        mut on_text: impl FnMut(&str),
+    ) -> Result<AgentAnswer> {
         tokio::time::timeout(
             Duration::from_secs(45),
-            self.run_inner(question, persona, history),
+            self.run_inner(question, persona, history, &mut on_text),
         )
         .await
         .context("联网查询超过 45 秒")?
@@ -209,6 +222,7 @@ impl Agent<'_> {
         question: &str,
         persona: &str,
         history: &[(String, String)],
+        on_text: &mut impl FnMut(&str),
     ) -> Result<AgentAnswer> {
         let normalized = normalize_voice_search(question.trim());
         let question = normalized.as_str();
@@ -240,6 +254,7 @@ impl Agent<'_> {
                 })
                 .context("请在问题中说出城市，或在联网查询卡片填写默认天气城市")?;
             let report = lookup_weather(&city, weather_day(question)).await?;
+            on_text(&report.answer_text);
             return Ok(AgentAnswer {
                 answer_text: report.answer_text,
                 sources: vec![report.source],
@@ -289,13 +304,13 @@ impl Agent<'_> {
             Ok(reply) => reply,
             Err(error) if error.to_string().contains("输出 token 上限") => {
                 return self
-                    .answer_from_sources(question, persona, &recent_context, sources)
+                    .answer_from_sources(question, persona, &recent_context, sources, on_text)
                     .await;
             }
             Err(error) => return Err(error),
         };
-        let answer = if first.calls.is_empty() {
-            first.text
+        let (answer, streamed) = if first.calls.is_empty() {
+            (first.text, false)
         } else {
             ensure!(first.calls.len() <= 3, "模型请求的工具过多");
             let calls = first.calls.iter().map(call_message).collect::<Vec<_>>();
@@ -306,25 +321,32 @@ impl Agent<'_> {
                     json!({"role":"tool","tool_call_id":call.id,"name":call.name,"content":result}),
                 );
             }
+            let mut emitted_body = false;
             let final_reply = match self
                 .model
-                .complete_tool_chat(&messages, &tools, false)
+                .stream_final_tool_chat(&messages, &tools, |delta| {
+                    emitted_body = true;
+                    on_text(delta);
+                })
                 .await
             {
                 Ok(reply) => reply,
-                Err(error) if error.to_string().contains("输出 token 上限") => {
+                Err(error) if !emitted_body && error.to_string().contains("输出 token 上限") => {
                     return self
-                        .answer_from_sources(question, persona, &recent_context, sources)
+                        .answer_from_sources(question, persona, &recent_context, sources, on_text)
                         .await;
                 }
                 Err(error) => return Err(error),
             };
-            ensure!(final_reply.calls.is_empty(), "模型在最终回复中仍请求工具");
-            final_reply.text
+            (final_reply, true)
         };
         ensure!(!answer.trim().is_empty(), "模型没有返回查询答案");
+        let answer_text = remove_unknown_citations(answer.trim(), &sources);
+        if !streamed {
+            on_text(&answer_text);
+        }
         Ok(AgentAnswer {
-            answer_text: remove_unknown_citations(answer.trim(), &sources),
+            answer_text,
             sources,
         })
     }
@@ -335,6 +357,7 @@ impl Agent<'_> {
         persona: &str,
         context: &str,
         sources: Vec<Source>,
+        on_text: &mut impl FnMut(&str),
     ) -> Result<AgentAnswer> {
         let evidence = sources
             .iter()
@@ -352,7 +375,7 @@ impl Agent<'_> {
         );
         let answer = self
             .model
-            .stream_native_chat(&prompt, persona, |_| {})
+            .stream_native_chat(&prompt, persona, on_text)
             .await
             .context("工具对话达到输出上限，改用简短检索摘要仍失败")?;
         Ok(AgentAnswer {
@@ -475,6 +498,105 @@ fn remove_unknown_citations(answer: &str, sources: &[Source]) -> String {
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+
+    #[test]
+    fn legacy_agent_api_still_returns_a_send_future() {
+        fn assert_send<T: Send>(_: T) {}
+        let model = LmStudioBackend::new(pet_inference_http::LmStudioConfig::new(
+            "http://127.0.0.1:9",
+            "offline",
+        ))
+        .unwrap();
+        let web = WebRetriever::new(SearchProvider::Wikipedia, None).unwrap();
+        let agent = Agent {
+            model: &model,
+            web: &web,
+            weather_city: "",
+        };
+        assert_send(agent.run("问题", "简短回答"));
+    }
+
+    #[tokio::test]
+    async fn native_source_fallback_forwards_body_before_end_and_keeps_registered_sources() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (heard_tx, heard_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = Vec::new();
+            let header_end = loop {
+                let mut buffer = [0; 4096];
+                let size = stream.read(&mut buffer).unwrap();
+                assert!(size > 0);
+                request.extend_from_slice(&buffer[..size]);
+                if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break end + 4;
+                }
+            };
+            let header = String::from_utf8_lossy(&request[..header_end]);
+            assert!(header.starts_with("POST /api/v1/chat"));
+            let length = header
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")?
+                        .parse::<usize>()
+                        .ok()
+                })
+                .unwrap();
+            while request.len() < header_end + length {
+                let mut buffer = [0; 4096];
+                let size = stream.read(&mut buffer).unwrap();
+                assert!(size > 0);
+                request.extend_from_slice(&buffer[..size]);
+            }
+            let request: Value =
+                serde_json::from_slice(&request[header_end..header_end + length]).unwrap();
+            assert_eq!(request["reasoning"], "off");
+            assert!(request["input"].as_str().unwrap().contains("网页证据"));
+            let first = "data: {\"type\":\"reasoning.delta\",\"content\":\"不朗读的推理\"}\n\ndata: {\"type\":\"message.delta\",\"content\":\"正文。[S1]\"}\n\n";
+            let last = "data: {\"type\":\"message.delta\",\"content\":\"尾巴。[S99]\"}\n\ndata: {\"type\":\"chat.end\",\"result\":{\"output\":[{\"type\":\"message\",\"content\":\"正文。[S1]尾巴。[S99]\"}]}}\n\n";
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", first.len() + last.len(), first).unwrap();
+            stream.flush().unwrap();
+            heard_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            stream.write_all(last.as_bytes()).unwrap();
+        });
+        let model = LmStudioBackend::new(pet_inference_http::LmStudioConfig::new(
+            format!("http://127.0.0.1:{port}"),
+            "mock",
+        ))
+        .unwrap();
+        let web = WebRetriever::new(SearchProvider::Wikipedia, None).unwrap();
+        let sources = vec![Source {
+            id: "S1".into(),
+            title: "来源".into(),
+            url: "https://example.com".into(),
+            snippet: "网页证据".into(),
+            retrieved_at: 0,
+        }];
+        let agent = Agent {
+            model: &model,
+            web: &web,
+            weather_city: "",
+        };
+        let mut deltas = Vec::new();
+        let answer = agent
+            .answer_from_sources("问题", "简短回答", "", sources, &mut |delta: &str| {
+                deltas.push(delta.to_owned());
+                if delta == "正文。[S1]" {
+                    heard_tx.send(()).unwrap();
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(deltas, ["正文。[S1]", "尾巴。[S99]"]);
+        assert_eq!(answer.answer_text, "正文。[S1]尾巴。");
+        assert_eq!(answer.sources[0].id, "S1");
+        server.join().unwrap();
+    }
     #[test]
     fn discards_unregistered_source_tags() {
         let sources = vec![Source {
@@ -587,16 +709,31 @@ mod tests {
                 }
                 let sent: Value =
                     serde_json::from_slice(&request[header_end..header_end + length]).unwrap();
-                let body = if round == 0 {
-                    let result: Value = serde_json::from_str(sent["messages"][3]["content"].as_str().unwrap()).unwrap();
+                let (body, content_type) = if round == 0 {
+                    let result: Value =
+                        serde_json::from_str(sent["messages"][3]["content"].as_str().unwrap())
+                            .unwrap();
                     let url = result["sources"][0]["url"].as_str().unwrap();
-                    json!({"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-page","type":"function","function":{"name":"fetch_page","arguments":json!({"url":url}).to_string()}}]}}]})
+                    (json!({"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-page","type":"function","function":{"name":"fetch_page","arguments":json!({"url":url}).to_string()}}]}}]}).to_string(), "application/json")
                 } else {
                     assert_eq!(sent["messages"][5]["role"], "tool");
-                    assert!(sent["messages"][5]["content"].as_str().unwrap().contains("source_id"));
-                    json!({"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Rust 是一种编程语言。[S1]"}}]})
-                }.to_string();
-                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+                    assert!(
+                        sent["messages"][5]["content"]
+                            .as_str()
+                            .unwrap()
+                            .contains("source_id")
+                    );
+                    assert_eq!(sent["stream"], true);
+                    assert_eq!(sent["tool_choice"], "none");
+                    (
+                        format!(
+                            "data: {}\n\ndata: [DONE]\n\n",
+                            json!({"choices":[{"finish_reason":"stop","delta":{"content":"Rust 是一种编程语言。[S1]"}}]})
+                        ),
+                        "text/event-stream",
+                    )
+                };
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", content_type, body.len(), body).unwrap();
             }
         });
         let model = LmStudioBackend::new(pet_inference_http::LmStudioConfig::new(

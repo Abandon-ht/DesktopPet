@@ -4,7 +4,7 @@
 
 ## 首版边界与数据流
 
-首版由用户点击角色头部或可选关键词开启半双工对话，启用时先播放本地提示音。音频经 VAD 端点后进入 sherpa-onnx 或 sherpa-ncnn 的 SenseVoice，识别结果先展示，再送 LM Studio。当前实现先收齐 LLM 回复，再按句顺序提交 ZipVoice；合成 PCM 进入**实际扬声器/耳机播放流**。每次播放后继续聆听，默认 8 秒无语音自动结束会话，可在面板调整。播放时不采集麦克风；再次点击头部会使旧会话失效并开启新会话，设置面板也可停止。KWS 在待机时监听，AEC、口型和增量 TTS 重叠执行尚未接入。后续配置与互动语音见[实施记录](20-p3-voice-settings-and-greetings.md)。
+首版由用户点击角色头部或可选关键词开启半双工对话，启用时先播放本地提示音。音频经 VAD 端点后进入 sherpa-onnx 或 sherpa-ncnn 的 SenseVoice，识别结果先展示，再送 LM Studio。2026-10-12 参考 `ax650` 已验证实现，macOS、Linux、Windows 共用语音模块改为 **LLM 正文增量 → 实时分句 → TTS 合成队列 → 持续播放**：首句完成就开始合成，LLM 继续生成后文，播放与下一句合成重叠。每次播放后继续聆听，默认 8 秒无语音自动结束会话，可在面板调整。播放时不采集麦克风；再次点击头部会使旧会话失效并开启新会话，设置面板也可停止。KWS 在待机时监听，AEC 和口型尚未接入。此前发布的三端 alpha 包仍使用串行实现，需要重新构建才能使用本流水线。后续配置与互动语音见[实施记录](20-p3-voice-settings-and-greetings.md)。
 
 ```mermaid
 flowchart LR
@@ -14,16 +14,18 @@ flowchart LR
   V --> A[SenseVoice int8 / 完整语句]
   A --> G[输入门控 / 首版点击允许]
   G --> L[LM Studio /api/v1/chat SSE / 可切换兼容端点]
-  L --> S[收齐正文 / 按句切分]
-  S --> T[ZipVoice int8 + Vocos / 句级合成]
-  T --> O[句级 PCM / 重采样 / CPAL 输出]
+  L --> S[正文增量 / 实时分句 / 有界句队列]
+  S --> T[ZipVoice + Vocos / 单工作线程句级合成]
+  T --> O[有界 PCM 队列 / 持续重采样 / 单 CPAL 输出流]
   O --> SP[系统选择的扬声器或耳机]
   O -. 预留播放参考帧 .-> E[AEC / 后续]
 ```
 
 当前 `pet-voice-session` 定义 `InputPort/AsrPort/LlmPort/TtsPort/PlaybackPort` 五个可替换接口，独立工作线程持有 sherpa-onnx 对象，CPAL 回调只读写预分配缓冲；以后云端 ASR/TTS/LLM 或 qwentts.cpp 各自实现对应端口。`pet-inference-http` 管理 LM Studio 的 HTTP/SSE。桌宠 UI 通过受限命令启动、停止和显示文本，不传送原始 PCM。当前使用系统默认输入／输出设备；设备选择、音频时钟与口型、AEC 作为后续扩展。音频和权重留在本机，聊天正文目前不写入桌宠存档。
 
-`TtsPort` 以 `Pcm { samples: Vec<f32>, sample_rate }` 回调传出一个或多个音频块，当前 ZipVoice 每句传出一个。未来 qwentts.cpp 的 `tts-server` 可把 `/v1/audio/speech` 的 `response_format: "pcm"` s16le 流转换为 f32 PCM 块，也可用其 C ABI；云端 TTS 走同一端口。当前 `PlaybackPort` 顺序播放每块，下一阶段若启用真正流式 TTS，应把它升级为持续输出流和有界队列，以消除块间空隙。云端 ASR 则实现 `AsrPort`，无需改角色点击、状态机和扬声器。
+`TtsPort` 以 `Pcm { samples: Vec<f32>, sample_rate }` 回调传出一个或多个音频块，当前 ZipVoice 每句生成完整 PCM 后回调。流水线把 PCM 分为不超过 250 ms 的块，以四块有界队列送到 `PlaybackPort::play_stream`；本地输出层另有 2 秒环形缓冲。重采样器跨块和句子保留状态，CPAL 输出流每轮只建立和耗尽一次，移除逐句重新打开设备及每句固定 80 ms 等待。整轮只在最后一块 PCM 被设备消费后按输出时间耗尽一次；CPAL 时间戳缺失、为零或明显异常时，保留“回调缓冲时长 + 80 ms”的尾部保护。该条件回退不插入句间停顿，不能将它描述为代码中所有 80 ms 均已删除。未来 qwentts.cpp 的 `tts-server` 可把 `/v1/audio/speech` 的 `response_format: "pcm"` s16le 流转换为 f32 PCM 块，也可用其 C ABI；云端 TTS 走同一端口。云端 ASR 则实现 `AsrPort`，无需改角色点击、状态机和扬声器。
+
+实时分句缓存未结束的正文，按中英文句末标点或长度提交；首段最多 40 字符，后续最多 80 字符。跨增量的十进制小数与 `[S数字]` 来源标签分别处理，来源保留在界面中。LLM 结束后只补未发送的尾部，非流式提供商仍支持完整回答。句队列上限 2，PCM 队列和设备环形缓冲合计约 3 秒；另有当前合成句的完整结果和正在传递的一块，不能将约 3 秒理解为全部内存占用。队列满时上游等待并检查轮次取消，失败会取消同轮其余工作线程，最终 PCM 的设备消费和输出时间到达后才回到 idle。
 
 ## 本机模型与配置
 
@@ -39,13 +41,13 @@ flowchart LR
 
 本机验证所用参考音频为单声道 44.1 kHz、约 12.96 秒。ZipVoice 的 Rust API 接收 `reference_audio` 和它的真实 `reference_sample_rate`；由适配器读取 WAV 后传入，不靠改采样率标签。若本机推理要求另一格式，由音频层真实重采样并记录处理结果。参考文字必须与音频逐字匹配，并只保存在用户本机配置中，不写入仓库。
 
-设置面板保存参考音频路径与文本，可修改或清空；不自动上传。ZipVoice `generate_with_config` 使用该参考、`num_steps=4` 和短句文本。进度回调用于取消，不把它标记为稳定音频流；当前是**句级**合成和播放。
+设置面板保存参考音频路径与文本，可修改或清空；不自动上传。ZipVoice `generate_with_config` 使用该参考、`num_steps=4` 和短句文本。进度回调用于取消；ZipVoice 仍是**句级离线合成**，现在由 LLM 增量驱动分句并与播放重叠。如果某句合成耗时长于现有待播音频，持续输出流仍会出现静音；需要结合句级 RTF 和播放 underrun 日志实测。
 
 ## Rust 接口与线程
 
 沿用仓库本地 sherpa-onnx `rust-api-examples` 的 `sense_voice_simulate_streaming_microphone.rs`、`sense_voice.rs`、`silero_vad_remove_silence.rs`、`zipvoice_tts.rs`。Rust 绑定固定为 1.13.8；当前本地实现集中在 `pet-voice-session::local`，规模扩大后可拆成独立 `inference-sherpa` crate。原生对象在专用工作线程持有，采集与播放回调只处理 PCM，不执行模型或网络请求。
 
-当前实现把本地 sherpa 适配器集中在 `pet-voice-session::local`，使用 `Pcm`、`TurnToken` 和五个端口 trait；下面更细的帧、时间戳与背压契约属于下一阶段接口升级目标。
+本地 sherpa 适配器位于 `pet-voice-session::local`，并发分句和合成位于 `streaming`，持续输出位于 `local_playback`，使用 `Pcm`、`TurnToken` 和五个端口 trait。句级背压与输出耗尽已接入；下面更细的捕获帧、口型时钟、设备恢复契约仍为后续目标。
 
 - `AudioFrame { generation_id, seq, capture_sample_start, sample_rate, channels, f32_pcm }`：20 ms 内部帧；设备采样率转换和混音在工作线程做，16 kHz 给 VAD/ASR。采集队列满时记录丢帧并重置该语句，不能偷偷拼接出错误时间轴。
 - `VadSegment { start_sample, end_sample, pcm_16k }`：约 500 ms 预录；静音 600 ms、语句最长 20 秒、等待首音 8 秒为起始参数。Silero `front/pop/flush` 取完整片段。需要将模型返回的边界与预录缓存时间轴对齐，避免重复送音。
@@ -61,6 +63,8 @@ flowchart LR
 
 当前用角色头部点击或可选关键词命中作为输入门控：只有有效会话的 ASR final 非空才可发 LLM。以后可在 ASR final 后接 `TranscriptClassifierGate`（小模型判断是否转交），但不做常驻识别。KWS 作为独立模型在待机监听，须评估误触发与漏触发。云端适配器同样通过 `InputPort/AsrPort/LlmPort/TtsPort/PlaybackPort` 契约替换，不让 UI 依赖具体提供商。
 
+联网 Agent 的工具规划仍完整收齐；执行工具后的最终 `tool_choice: none` 回答及原生摘要回退会透传正文增量，工具字段和推理不朗读。如果首轮直接决定不调用工具，该回答仍在完成后一次性提交；固定天气文本也一次性提交。已开始朗读的最终流失败时不再重新生成，避免重复朗读前文。非流式提供商无法提前交付正文，但仍可使用合成与播放重叠的队列。
+
 后续 AEC 的接口草案为 `process(capture_frame, playback_reference, clocks) -> clean_frame`。参考流应来自真正提交给输出设备的 PCM，接口携带输入/输出采样时间和设备 ID，以处理延迟、漂移和热切换。当前代码尚未接入 AEC，播放期间关闭麦克风输入；macOS、Windows、Linux 分别选择和验证平台实现。不要把 CPAL 自身视为 AEC。
 
 ## 实施顺序与验收
@@ -68,7 +72,7 @@ flowchart LR
 1. **P3a 文本后端（已实现）**：模型发现、两种 SSE 增量、错误与取消；以本机目标模型做一次原生 API 真实短回复，确认不转发推理字段。兼容端点保留供其他模型和服务使用。
 2. **P3b 文件离线验证（已做功能试跑，质量待验）**：用下载的 SenseVoice 测试 WAV 跑 ASR；用 ZipVoice 模型及用户选定参考声音生成本地 WAV，核对参考文字、采样率、合成 RTF 与中文音质。测试 WAV 只留 `artifacts/local/`。
 3. **P3c 音频设备和 VAD（代码已接，人工验收待做）**：系统默认输入／输出设备、麦克风采样格式转换、Silero 分段和缓冲溢出报错已接入。设备选择、设备切换恢复、完整权限提示与文件回放端点测试待做。
-4. **P3d 闭环（代码已接，真实桌面验收待做）**：`voice-session` 状态机、角色点击、持续多轮至 8 秒静默超时、ASR final、LM Studio 本机会话上下文、按句 ZipVoice、真实 CPAL 扬声器输出、停止按钮和故障状态已接线。口型、生成与合成重叠、更多声音配置待做。
+4. **P3d 闭环（代码已接，真实桌面验收待做）**：`voice-session` 状态机、角色点击、持续多轮至 8 秒静默超时、ASR final、LM Studio 本机会话上下文、按句 ZipVoice、真实 CPAL 扬声器输出、停止按钮和故障状态已接线。`ax650` 分支已实现 LLM 生成、TTS 合成与持续播放重叠，真实板端听感待测；口型和更多声音配置待做。
 5. **P3e 同步及压力测试**：口型样本时钟、50 轮串轮/队列测试、100 条中文 ASR 样本和 CER、设备拔插及 LM Studio 断开。记录各阶段 p50/p95、端到端首音、音频队列最大值和 CPU/内存。未达到 [原目标](04-voice-and-compute.md#测量标准) 时保留数据与瓶颈说明。
 
 命令行后端验证：在仓库根目录执行 `cargo run -p pet-inference-http --bin lm-studio-smoke -- http://127.0.0.1:1234 qwen/qwen3.6-35b-a3b '请用一句话打招呼。'`。不传第三个参数只做模型列表探测；在提示词后加 `--compat` 可单独试兼容端点。此命令不启动麦克风、TTS 或播放。
@@ -83,3 +87,11 @@ flowchart LR
 - ZipVoice 用本地参考音频及匹配文本合成同一条 2.933 秒、24 kHz 中文短句：1 线程耗时 4.363 秒（RTF 1.487），4 线程 1.526 秒（RTF 0.520），8 线程 0.970 秒（RTF 0.331）。因此默认 8 线程、允许 1–16；仍需真实多轮并发基线和听感评分。CLI 报告输入 44.1 kHz 已重采样到 24 kHz。
 - `voice-smoke` 已把本机 LM Studio 回复经 Rust ZipVoice 合成并送到 CPAL 默认扬声器，状态顺序为 listening → recognizing → thinking → synthesizing → speaking → idle；此试跑用固定文字模拟 ASR，不代表麦克风端点已验收。
 - LM Studio 模型列表包含精确模型 ID；兼容端点在 512 输出 token 内没有给出正文，后端正确报告 token limit。原生端点以 `reasoning: "off"` 返回简短正文“你好。”，SSE 文本增量可用。原生请求设置 `store: false`。
+
+## 三端移植与验证（2026-10-12）
+
+从 AX650 功能提交 `4dba168` 移植共用 `streaming` / `local_playback`、联网最终正文流和对应回归到 macOS 主线、Linux X11 和 Windows 分支。没有平台条件分支绕过本流水线：macOS CoreAudio、Linux ALSA、Windows WASAPI 均由 `SpeakerOutput::play_stream` 使用每轮单输出流、连续重采样和有界队列。保留各平台自己的模型运行库、LLM 设置和窗口实现。
+
+测试覆盖首音早于 LLM 结束、播放与后句合成重叠、句序与尾句、跨增量小数和来源编号、队列背压、取消、错误传播、单次输出启动、重采样连续性和尾部耗尽。普通聊天正文可实时分句；联网工具规划不播报，最终回答或原生摘要回退走正文流，非流式回复在完整返回后入队。ZipVoice 仍按句离线生成 PCM；合成慢于待播音频时会有欠载静音，持续输出流不保证无间断音频。
+
+各平台手动构建流程须运行 `cargo +1.95.0 test --locked -p pet-voice-session -p pet-inference-http -p pet-agent-runtime`。测试不打开真实麦克风或扬声器；真实设备听感、取消延迟、蓝牙与热切换须分别验收，编译成功不代替声音验收。
