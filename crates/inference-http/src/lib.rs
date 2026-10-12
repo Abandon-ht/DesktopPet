@@ -350,18 +350,22 @@ impl LmStudioBackend {
         mut on_text: impl FnMut(&str),
     ) -> Result<String> {
         ensure_tool_messages(messages)?;
+        let mut request = serde_json::json!({
+            "model": self.config.model_id,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": "none",
+            "max_tokens": self.config.max_output_tokens.max(768),
+            "stream": true
+        });
+        if self.config.disable_thinking {
+            request["reasoning_effort"] = "none".into();
+        }
         let response = self
             .client
             .post(self.base_url.join("chat/completions")?)
             .header("Accept", "text/event-stream")
-            .json(&serde_json::json!({
-                "model": self.config.model_id,
-                "messages": messages,
-                "tools": tools,
-                "tool_choice": "none",
-                "max_tokens": self.config.max_output_tokens.max(768),
-                "stream": true
-            }))
+            .json(&request)
             .send()
             .await
             .context("联网最终回复请求失败")?;
@@ -709,6 +713,7 @@ mod tests {
             let request = read_request(&mut stream);
             assert_eq!(request["stream"], true);
             assert_eq!(request["tool_choice"], "none");
+            assert_eq!(request["reasoning_effort"], "none");
             assert_eq!(request["messages"][2]["role"], "tool");
             assert_eq!(request["messages"][2]["content"], "网页正文证据");
             let first = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"内部推理\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"正文。\"}}]}\n\n";
@@ -719,11 +724,9 @@ mod tests {
             heard_rx.recv_timeout(Duration::from_secs(2)).unwrap();
             stream.write_all(last.as_bytes()).unwrap();
         });
-        let backend = LmStudioBackend::new(LmStudioConfig::new(
-            format!("http://127.0.0.1:{port}"),
-            "mock",
-        ))
-        .unwrap();
+        let mut config = LmStudioConfig::new(format!("http://127.0.0.1:{port}"), "mock");
+        config.disable_thinking = true;
+        let backend = LmStudioBackend::new(config).unwrap();
         let messages = [
             serde_json::json!({"role":"user","content":"问题"}),
             serde_json::json!({"role":"assistant","tool_calls":[{"id":"page","type":"function","function":{"name":"fetch_page","arguments":"{}"}}]}),
@@ -752,6 +755,7 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let request = read_request(&mut stream);
             assert_eq!(request["tool_choice"], "none");
+            assert!(request.get("reasoning_effort").is_none());
             let body = "data: {\"choices\":[{\"delta\":{\"content\":\"工具规划不可朗读\",\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"fetch_page\",\"arguments\":\"{}\"}}]}}]}\n\ndata: [DONE]\n\n";
             write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
         });
