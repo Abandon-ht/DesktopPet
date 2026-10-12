@@ -27,7 +27,7 @@ try {
     & rustc +1.95.0-x86_64-pc-windows-msvc -vV
     if ($LASTEXITCODE -ne 0) { throw 'The pinned Rust toolchain is not available.' }
     if ($RunTests) {
-        $taskTestArguments = @('test', '--locked', '--release', '-p', 'desktop-pet', '-p', 'avatar-host-2d', '-p', 'pet-inference-http')
+        $taskTestArguments = @('test', '--locked', '--release', '-p', 'desktop-pet', '-p', 'avatar-host-2d', '-p', 'pet-inference-http', '-p', 'pet-voice-session', '-p', 'pet-agent-runtime')
         if ($HeadlessTests) {
             # DWM visible-window validation requires an interactive desktop.
             $taskTestArguments += @('--', '--skip', 'native_window_bounds_feed_snap_and_hidden_windows_are_rejected')
