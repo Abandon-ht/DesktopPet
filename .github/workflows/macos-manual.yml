@@ -74,6 +74,8 @@ jobs:
 
           Download and open \`DesktopPet.dmg\`, then drag \`DesktopPet.app\` onto the Applications shortcut before launching it. The app has an ad-hoc signature and is not Apple notarized. Direct double-click launch on a clean Mac has not yet been validated. LLM replies require your own LM Studio server and model.
 
+          Voice replies now segment incremental LLM body text into bounded TTS and PCM queues. Synthesis overlaps continuous playback; each reply uses one output stream and has no fixed 80 ms wait between sentences. A timestamp fallback guard remains only at the end of the reply. The local macOS test build passed user validation; this CI package is built and signed separately.
+
           SHA-256: \`${digest}\`. A matching \`SHA256SUMS.txt\` is attached.
 
           Resources: [${RESOURCE_TAG}](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RESOURCE_TAG}). Sources, known licenses, and unresolved rights: [ASSETS.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/ASSETS.md). Copyright contact/removal: [POLICY.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/POLICY.md).
