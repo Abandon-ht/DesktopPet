@@ -72,7 +72,7 @@ flowchart LR
 1. **P3a 文本后端（已实现）**：模型发现、两种 SSE 增量、错误与取消；以本机目标模型做一次原生 API 真实短回复，确认不转发推理字段。兼容端点保留供其他模型和服务使用。
 2. **P3b 文件离线验证（已做功能试跑，质量待验）**：用下载的 SenseVoice 测试 WAV 跑 ASR；用 ZipVoice 模型及用户选定参考声音生成本地 WAV，核对参考文字、采样率、合成 RTF 与中文音质。测试 WAV 只留 `artifacts/local/`。
 3. **P3c 音频设备和 VAD（代码已接，人工验收待做）**：系统默认输入／输出设备、麦克风采样格式转换、Silero 分段和缓冲溢出报错已接入。设备选择、设备切换恢复、完整权限提示与文件回放端点测试待做。
-4. **P3d 闭环（代码已接，真实桌面验收待做）**：`voice-session` 状态机、角色点击、持续多轮至 8 秒静默超时、ASR final、LM Studio 本机会话上下文、按句 ZipVoice、真实 CPAL 扬声器输出、停止按钮和故障状态已接线。`ax650` 分支已实现 LLM 生成、TTS 合成与持续播放重叠，真实板端听感待测；口型和更多声音配置待做。
+4. **P3d 闭环（代码已接，真实桌面验收待做）**：`voice-session` 状态机、角色点击、持续多轮至 8 秒静默超时、ASR final、LM Studio 本机会话上下文、按句 ZipVoice、真实 CPAL 扬声器输出、停止按钮和故障状态已接线。macOS、Linux、Windows 和 `ax650` 均已实现 LLM 生成、TTS 合成与持续播放重叠；macOS 本次本地包的用户功能验收见下文。口型和更多声音配置待做，各平台设备结果分别记录。
 5. **P3e 同步及压力测试**：口型样本时钟、50 轮串轮/队列测试、100 条中文 ASR 样本和 CER、设备拔插及 LM Studio 断开。记录各阶段 p50/p95、端到端首音、音频队列最大值和 CPU/内存。未达到 [原目标](04-voice-and-compute.md#测量标准) 时保留数据与瓶颈说明。
 
 命令行后端验证：在仓库根目录执行 `cargo run -p pet-inference-http --bin lm-studio-smoke -- http://127.0.0.1:1234 qwen/qwen3.6-35b-a3b '请用一句话打招呼。'`。不传第三个参数只做模型列表探测；在提示词后加 `--compat` 可单独试兼容端点。此命令不启动麦克风、TTS 或播放。
@@ -105,3 +105,9 @@ flowchart LR
 | Windows / NVIDIA 分支 | 分别移植共用流水线，保留 Ollama 的 `disable_thinking` 设置；新增最终正文流也发送 `reasoning_effort: none`，有开启 / 关闭的请求回归。Windows 分支的 48 项相关回归在 macOS 通过；NVIDIA 分支 all-targets 检查通过。使用隔离编译试件将真实 `local_playback`、轮次取消类型及其测试以 `x86_64-pc-windows-msvc` / WASAPI 检查通过，sherpa docs 模式跳过 C 库链接。完整 Windows 应用的原生链接、安装包及真实 WASAPI 试听仍需 Windows 构建机与设备验证。 |
 
 以上回归均保留 7 项需要网络、模型或实机的既有忽略测试；不将忽略项计为通过。三端构建入口已纳入流水线回归。实现保存在 `codex/macos-streaming-voice`、`codex/linux-streaming-voice`、`codex/windows-streaming-voice` 及 `codex/windows-nvidia-streaming-voice` 本地分支，分别基于原平台分支；原平台发布记录仍对应此前的串行实现。
+
+### 用户验收与提交（2026-10-13）
+
+用户确认本次 macOS 本地应用测试完成、没有问题，并授权提交、推送及手动触发三端 Actions。此前发现的路径故障来自本机旧语音存档仍引用已移走应用的绝对路径；已备份并将模型、问候语音和参考 WAV 三项迁移为现有相对资源格式，其他设置和养成 / 记忆数据保持原样。按用户要求只处理本机配置，没有加入 App 兼容逻辑，旧存档和备份不提交 Git。
+
+交付到 `master`（macOS）、`codex/linux-x11-baseline`（Linux X11）、`windows`，并同步共用流水线到 `windows-nvidia`。手动构建继续使用既有 `resources-2026-09-29` 资源，生成 macOS DMG、Linux x86_64 AppImage 和 Windows x64 签名安装器；实际编译 / 打包 / 发布结果由对应 Actions 单独确认。当前用户反馈对应 macOS 本地包，不扩大为其他平台或新 CI 包的实机验收。
