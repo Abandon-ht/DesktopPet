@@ -185,6 +185,8 @@ jobs:
 
           Download **DesktopPet-linux-x86_64.AppImage**, mark it executable and launch it. Character, interaction voices and CPU ASR/VAD/TTS/KWS models from the existing resource Release are included; no separate ZIP download is needed. Settings opens on startup. Voice, KWS, greetings and web access default to disabled; enable audio in settings when input/output devices are available. Linux audio remains unvalidated. User settings and saves live outside the AppImage; LLM services/models are supplied separately by the user.
 
+          Voice replies now segment incremental LLM body text into bounded TTS and PCM queues. Synthesis overlaps continuous playback; each reply uses one output stream and has no fixed 80 ms wait between sentences. A timestamp fallback guard remains only at the end of the reply. Real Linux audio requires separate device validation.
+
           Requires glibc 2.35+, a compatible GPU/Vulkan driver, an X11 compositor and an AppIndicator/StatusNotifier tray host. Native Wayland is not implemented; XWayland, other distributions, mixed DPI and multiple monitors require separate validation. Other-application window snapping is not implemented on Linux.
 
           For the previously verified NVIDIA Vulkan / XFCE X11 transparency combination, launch with \`GDK_BACKEND=x11 DESKTOPPET_X11_OPAQUE_ALPHA=1 ./DesktopPet-linux-x86_64.AppImage\`. This opt-in is not a claim of compatibility with every NVIDIA desktop.
